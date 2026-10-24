@@ -1,0 +1,29 @@
+# Render Blueprint for the API. The database is hosted elsewhere (see docs/DEPLOY.md); DATABASE_URL is set in the dashboard.
+services:
+  - type: web
+    name: socialambak-api
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm run migrate && npm start
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: NODE_ENV
+        value: development # the sign-up codes are shown on screen (no email/SMS provider yet); production mode refuses that
+      - key: TRUST_PROXY
+        value: 2
+      - key: CLIENT_ORIGIN
+        sync: false # your Netlify address, e.g. https://socialambak.netlify.app
+      - key: DATABASE_URL
+        sync: false # mysql://user:pass@host:port/dbname
+      - key: JWT_ACCESS_SECRET
+        sync: false # 64 hex characters, from `npm run gen:keys`
+      - key: PHONE_ENC_KEY
+        sync: false # 64 hex characters, from `npm run gen:keys`
+      - key: PHONE_HASH_KEY
+        sync: false # 64 hex characters, from `npm run gen:keys`
+      - key: OTP_HASH_KEY
+        sync: false # 64 hex characters, from `npm run gen:keys`

@@ -8,7 +8,7 @@ export const pool = mysql.createPool({
   queueLimit: 0,
   enableKeepAlive: true,
   keepAliveInitialDelay: 30_000,
-  connectTimeout: 5_000,
+  connectTimeout: 20_000,
   timezone: 'Z', // DATETIME values are read and written as UTC
   charset: 'utf8mb4_0900_ai_ci',
   supportBigNumbers: true,

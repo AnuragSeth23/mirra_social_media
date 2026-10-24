@@ -16,6 +16,8 @@ const schema = z.object({
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(30),
   OTP_DELIVERY: z.enum(['console']).default('console'),
   // Turns every rate limit off. For automated tests on a developer machine only; refused in production.
+  // Number of proxies in front of the API (Netlify + Render = 2), so rate limits see the real visitor address.
+  TRUST_PROXY: z.coerce.number().int().min(0).max(5).default(0),
   DISABLE_RATE_LIMITS: z.enum(['0', '1']).default('0'),
 });
 

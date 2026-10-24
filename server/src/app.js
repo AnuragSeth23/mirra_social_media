@@ -21,7 +21,8 @@ import { usersRouter } from './modules/users/users.routes.js';
 export function createApp() {
   const app = express();
   app.disable('x-powered-by');
-  if (config.isProd) app.set('trust proxy', 1); // one load balancer in front; adjust to your topology
+  if (config.TRUST_PROXY) app.set('trust proxy', config.TRUST_PROXY);
+  else if (config.isProd) app.set('trust proxy', 1); // one load balancer in front; adjust to your topology
 
   app.use(helmet());
   app.use(cors({ origin: config.CLIENT_ORIGIN, credentials: true, allowedHeaders: ['Content-Type', 'Authorization', 'X-SocialAmbak-Client'] }));
