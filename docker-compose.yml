@@ -1,0 +1,18 @@
+# Local infrastructure. Redis joins in the real-time phase (Socket.IO adapter, shared rate limits).
+services:
+  db:
+    image: mysql:8.4
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_0900_ai_ci", "--default-time-zone=+00:00"]
+    environment:
+      MYSQL_ROOT_PASSWORD: root_dev_only
+      MYSQL_DATABASE: mirra
+      MYSQL_USER: mirra
+      MYSQL_PASSWORD: mirra_dev
+    ports: ["3306:3306"]
+    volumes: [mysqldata:/var/lib/mysql]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot_dev_only"]
+      interval: 5s
+      retries: 20
+volumes:
+  mysqldata:

@@ -1,0 +1,35 @@
+{
+  "name": "socialambak-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "node --watch-path=./src src/index.js",
+    "start": "node src/index.js",
+    "migrate": "node src/db/migrate.js",
+    "check": "node scripts/check-syntax.js",
+    "smoke": "node scripts/smoke.js",
+    "smoke:social": "node scripts/social-smoke.js",
+    "smoke:complete": "node scripts/complete-smoke.js",
+    "smoke:privacy": "node scripts/privacy-smoke.js",
+    "test:api": "npm run check && npm run smoke && npm run smoke:social && npm run smoke:complete && npm run smoke:privacy",
+    "gen:keys": "node -e \"for (const k of ['JWT_ACCESS_SECRET','PHONE_ENC_KEY','PHONE_HASH_KEY','OTP_HASH_KEY']) console.log(k + '=' + require('crypto').randomBytes(32).toString('hex'))\""
+  },
+  "dependencies": {
+    "@node-rs/argon2": "^2.2.2",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.8",
+    "express": "^4.22.3",
+    "express-rate-limit": "^8.7.1",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "libphonenumber-js": "^1.13.15",
+    "mysql2": "^3.24.6",
+    "qrcode": "^1.5.4",
+    "zod": "^3.25.76"
+  }
+}
