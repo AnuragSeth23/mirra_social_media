@@ -9,14 +9,14 @@ import mysql from 'mysql2/promise';
 import { config } from '../src/config/env.js';
 import { codeForStep, stepAt } from '../src/lib/totp.js';
 import { signMedia } from '../src/lib/media.js';
+import { emailIndex } from '../src/lib/crypto.js';
 
 const API = process.env.API_URL ?? 'http://localhost:4000/api/v1';
 const ORIGIN = API.replace(/\/api\/v1$/, '');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const db = await mysql.createConnection(config.DATABASE_URL);
 const dbCode = async (channel, who) =>
-  (await db.query(`SELECT vc.dev_code FROM verification_codes vc JOIN users u ON u.id = vc.user_id WHERE (u.email = ? OR u.username = ?) AND vc.channel = ? ORDER BY vc.id DESC LIMIT 1`, [who, who, channel]))[0][0].dev_code;
-const hex = (id) => id.replace(/-/g, '');
+  (await db.query(`SELECT vc.dev_code FROM verification_codes vc JOIN users u ON u.id = vc.user_id WHERE (u.email_hash = ? OR u.username = ?) AND vc.channel = ? ORDER BY vc.id DESC LIMIT 1`, [emailIndex(who), who, channel]))[0][0].dev_code;
 
 async function call(method, path, token, body) {
   const res = await fetch(API + path, {
@@ -35,13 +35,13 @@ async function upload(token) {
 let counter = 0;
 async function newUser(tag) {
   const id = `${Date.now().toString(36).slice(-5)}${tag}${counter++}`;
-  const u = { fullName: `Priv ${tag}`, username: `p${id}`, email: `p${id}@example.com`, phone: `+1415${2 + Math.floor(Math.random() * 8)}${String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')}`, password: 'tidepool42', dateOfBirth: '1998-04-12' };
+  const u = { fullName: `Priv ${tag}`, username: `p${id}`, email: `p${id}@example.com`, phone: `+1415${2 + Math.floor(Math.random() * 8)}${String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')}`, password: 'tidepool42', dateOfBirth: '1998-04-12', verifyVia: tag.charCodeAt(0) % 2 ? 'email' : 'phone' };
   const s = await call('POST', '/auth/signup', undefined, u);
   if (s.status !== 201) throw new Error('signup failed ' + JSON.stringify(s.json));
   const ticket = s.json.data.ticket;
   await sleep(120);
-  await call('POST', '/auth/verify', undefined, { ticket, channel: 'email', code: await dbCode('email', u.email) });
-  const v = await call('POST', '/auth/verify', undefined, { ticket, channel: 'phone', code: await dbCode('phone', u.username) });
+  const via = s.json.data.pending[0]; // one code, on the channel this user chose
+  const v = await call('POST', '/auth/verify', undefined, { ticket, channel: via, code: await dbCode(via, u.username) });
   return { id: v.json.data.user.id, token: v.json.data.accessToken, u };
 }
 let passed = 0;
@@ -266,12 +266,12 @@ expect('name and username search still works', (await find(Y, X.u.username)).inc
 const p0 = await call('GET', '/privacy', Y.token);
 expect('privacy settings start with the privacy-first defaults', p0.status === 200 && p0.json.data.showEmail === 'only_me' && p0.json.data.findByEmail === 'nobody' && p0.json.data.whoCanFriendRequest === 'everyone' && p0.json.data.defaultPostAudience === 'public' && p0.json.data.reviewTags === false, p0.json);
 const p1 = await call('PATCH', '/privacy', Y.token, { showEmail: 'everyone', reviewTags: true, messagesFrom: 'friends', readReceipts: false, whoCanTag: 'friends' });
-const row = (await db.query('SELECT show_email, review_tags, who_can_tag FROM user_privacy WHERE user_id = UNHEX(?)', [hex(Y.id)]))[0][0];
-const srow = (await db.query('SELECT messages_from, read_receipts FROM user_settings WHERE user_id = UNHEX(?)', [hex(Y.id)]))[0][0];
+const row = (await db.query('SELECT show_email, review_tags, who_can_tag FROM user_privacy WHERE user_id = ?', [Y.id]))[0][0];
+const srow = (await db.query('SELECT messages_from, read_receipts FROM user_settings WHERE user_id = ?', [Y.id]))[0][0];
 expect('privacy changes are saved in the database (not just in the response)', p1.status === 200 && row.show_email === 'everyone' && row.review_tags === 1 && row.who_can_tag === 'friends' && srow.messages_from === 'friends' && srow.read_receipts === 0, [row, srow]);
 expect('an invalid value is refused (422)', (await call('PATCH', '/privacy', Y.token, { showEmail: 'the-whole-world' })).status === 422);
 expect('fields that are not privacy settings are refused, so nobody can change role, id or status (422)', (await call('PATCH', '/privacy', Y.token, { role: 'admin' })).status === 422 && (await call('PATCH', '/privacy', Y.token, { userId: X.id, showEmail: 'everyone' })).status === 422);
-expect('one user cannot change another user’s settings (there is no id to send)', (await db.query('SELECT show_email FROM user_privacy WHERE user_id = UNHEX(?)', [hex(X.id)]))[0][0].show_email === 'only_me');
+expect('one user cannot change another user’s settings (there is no id to send)', (await db.query('SELECT show_email FROM user_privacy WHERE user_id = ?', [X.id]))[0][0].show_email === 'only_me');
 expect('privacy endpoints need sign-in (401)', (await call('GET', '/privacy')).status === 401 && (await call('PATCH', '/privacy', undefined, { showEmail: 'everyone' })).status === 401);
 const goPublic = await newUser('gopublic');
 const asker = await newUser('asker');
@@ -328,15 +328,15 @@ const chatRp = await call('POST', `/messages/with/${Rp2.id}`, Rp1.token);
 const rpMsg = (await call('POST', `/messages/${chatRp.json.data.id}`, Rp1.token, { body: 'a rude message' })).json.data;
 const report = (user, targetType, targetId, reason = 'spam', details) => call('POST', '/safety/report', user.token, { targetType, targetId, reason, details });
 expect('a visible post, a comment and a profile can be reported', (await report(Rp1, 'post', rpFr.id, 'harassment', 'private details')).status === 200 && (await report(Rp2, 'comment', rpComment.id)).status === 200 && (await report(Rp1, 'user', Rp2.id)).status === 200);
-expect('a message can be reported by someone in the conversation, and reports are stored once', (await report(Rp2, 'message', rpMsg.id)).status === 200 && (await report(Rp2, 'message', rpMsg.id)).status === 200 && (await db.query('SELECT COUNT(*) AS n FROM reports WHERE target_id = UNHEX(?)', [hex(rpMsg.id)]))[0][0].n === 1);
+expect('a message can be reported by someone in the conversation, and reports are stored once', (await report(Rp2, 'message', rpMsg.id)).status === 200 && (await report(Rp2, 'message', rpMsg.id)).status === 200 && (await db.query('SELECT COUNT(*) AS n FROM reports WHERE target_id = ?', [rpMsg.id]))[0][0].n === 1);
 expect('reporting something you cannot see answers 404 (no probing of private posts or other people’s messages)', (await report(Rp3, 'post', rpFr.id)).status === 404 && (await report(Rp3, 'message', rpMsg.id)).status === 404 && (await report(Rp3, 'comment', rpComment.id)).status === 404);
 expect('you cannot report yourself, and the reason must be a known one', (await report(Rp2, 'post', rpFr.id)).status === 422 && (await report(Rp1, 'post', rpFr.id, 'because')).status === 422);
-const stored = (await db.query("SELECT reporter_id, reason, details FROM reports WHERE target_id = UNHEX(?) AND target_type = 'post'", [hex(rpFr.id)]))[0][0];
-expect('the report is stored with the reporter and details (for moderators only)', stored.reporter_id.toString('hex') === hex(Rp1.id) && stored.details === 'private details' && stored.reason === 'harassment');
+const stored = (await db.query("SELECT reporter_id, reason, details FROM reports WHERE target_id = ? AND target_type = 'post'", [rpFr.id]))[0][0];
+expect('the report is stored with the reporter and details (for moderators only)', stored.reporter_id === Rp1.id && stored.details === 'private details' && stored.reason === 'harassment');
 const everythingTheReportedPersonCanFetch = JSON.stringify([(await call('GET', `/users/by/${Rp2.u.username}`, Rp2.token)).json, (await call('GET', '/notifications', Rp2.token)).json, (await call('GET', `/posts/${rpFr.id}`, Rp2.token)).json, (await call('GET', '/safety/blocked', Rp2.token)).json]);
 expect('nothing the reported person can fetch contains a report field or its reason or details', !/"report(s|er|edBy)?[A-Za-z]*"/i.test(everythingTheReportedPersonCanFetch) && !/harassment|private details/.test(everythingTheReportedPersonCanFetch));
 expect('ordinary users cannot open the moderation area (403), nor can anonymous visitors (401)', (await call('GET', '/moderation/reports', Rp1.token)).status === 403 && (await call('GET', '/moderation/reports')).status === 401);
-await db.query("UPDATE users SET role = 'moderator' WHERE id = UNHEX(?)", [hex(Rp3.id)]);
+await db.query("UPDATE users SET role = 'moderator' WHERE id = ?", [Rp3.id]);
 const queue = await call('GET', '/moderation/reports', Rp3.token);
 expect('a moderator sees the open reports, including who filed them', queue.status === 200 && queue.json.data.some((r) => r.targetId === rpFr.id && r.reporter === Rp1.u.username), queue.json?.data?.length);
 const rid = queue.json.data.find((r) => r.targetId === rpFr.id).id;
@@ -452,15 +452,15 @@ expect('two-factor starts switched off', st0.json.data.enabled === false && st0.
 const setup = await call('POST', '/account/2fa/setup', T2.token);
 const secret = setup.json.data.secret;
 expect('setup returns a secret, a QR code and an otpauth link', /^[A-Z2-7]{32}$/.test(secret) && setup.json.data.qrDataUrl.startsWith('data:image/png') && setup.json.data.otpauthUrl.startsWith('otpauth://totp/'), Object.keys(setup.json.data));
-const stored2fa = (await db.query('SELECT totp_secret_enc, totp_enabled_at FROM users WHERE id = UNHEX(?)', [hex(T2.id)]))[0][0];
+const stored2fa = (await db.query('SELECT totp_secret_enc, totp_enabled_at FROM users WHERE id = ?', [T2.id]))[0][0];
 expect('the secret is stored encrypted, never in plain text, and is not active yet', !stored2fa.totp_secret_enc.toString('latin1').includes(secret) && !stored2fa.totp_secret_enc.toString('utf8').includes(secret) && stored2fa.totp_enabled_at === null);
 expect('a login before confirming still needs no second step', (await login(T2.u.username)).json.data.accessToken !== undefined);
 expect('enabling with a wrong code is refused (400)', (await call('POST', '/account/2fa/enable', T2.token, { code: '000000' })).status === 400);
 const enable = await call('POST', '/account/2fa/enable', T2.token, { code: codeForStep(secret, stepAt()) });
 const backup = enable.json.data.backupCodes;
 expect('a correct code enables it and shows 10 backup codes once', enable.status === 200 && backup.length === 10 && /^[A-Z2-9]{5}-[A-Z2-9]{5}$/.test(backup[0]), enable.json);
-const hashes = (await db.query('SELECT code_hash FROM backup_codes WHERE user_id = UNHEX(?)', [hex(T2.id)]))[0];
-expect('backup codes are stored only as hashes', hashes.length === 10 && hashes.every((h) => Buffer.isBuffer(h.code_hash) && h.code_hash.length === 32));
+const hashes = (await db.query('SELECT code_hash FROM backup_codes WHERE user_id = ?', [T2.id]))[0];
+expect('backup codes are stored only as hashes', hashes.length === 10 && hashes.every((h) => /^[0-9a-f]{64}$/.test(h.code_hash)));
 expect('setting it up again while on is refused (409)', (await call('POST', '/account/2fa/setup', T2.token)).status === 409);
 
 const step1 = await login(T2.u.username);
@@ -484,13 +484,13 @@ const lockTicket = (await login(T2.u.username)).json.data.ticket;
 let last;
 for (let i = 0; i < 6; i++) last = await call('POST', '/auth/2fa', undefined, { ticket: lockTicket, code: String(100000 + i) });
 expect('after 5 wrong codes the account is locked out of the second step for a while (429)', last.status === 429, last.json);
-await db.query("DELETE FROM activity_log WHERE user_id = UNHEX(?) AND action = 'two_factor_failed'", [hex(T2.id)]);
+await db.query("DELETE FROM activity_log WHERE user_id = ? AND action = 'two_factor_failed'", [T2.id]);
 const wrongPw = await call('POST', '/account/2fa/disable', done.json.data.accessToken, { password: 'not-the-password1', code: codeForStep(secret, stepAt() + 1) });
 expect('turning it off needs the password (403)', wrongPw.status === 403);
 const regen = await call('POST', '/account/2fa/backup-codes', done.json.data.accessToken, { password: 'tidepool42', code: backup[1] });
 expect('new backup codes need the password and a code, and the old ones stop working', regen.status === 200 && regen.json.data.backupCodes.length === 10 && (await call('POST', '/auth/2fa', undefined, { ticket: (await login(T2.u.username)).json.data.ticket, code: backup[2] })).status === 400);
 const off = await call('POST', '/account/2fa/disable', done.json.data.accessToken, { password: 'tidepool42', code: regen.json.data.backupCodes[0] });
-expect('turning it off with password and a code works; sign-in is single-step again and the secret is gone', off.status === 200 && (await login(T2.u.username)).json.data.accessToken !== undefined && (await db.query('SELECT totp_secret_enc FROM users WHERE id = UNHEX(?)', [hex(T2.id)]))[0][0].totp_secret_enc === null);
+expect('turning it off with password and a code works; sign-in is single-step again and the secret is gone', off.status === 200 && (await login(T2.u.username)).json.data.accessToken !== undefined && (await db.query('SELECT totp_secret_enc FROM users WHERE id = ?', [T2.id]))[0][0].totp_secret_enc === null);
 expect('two-factor endpoints need sign-in (401)', (await call('GET', '/account/2fa')).status === 401 && (await call('POST', '/account/2fa/setup')).status === 401);
 
 // =========================================================================================== 9. active sessions

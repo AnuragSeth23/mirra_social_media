@@ -14,13 +14,27 @@ import { exec, pool, q, tx } from '../../db/pool.js';
 import { NOT_BLOCKED } from '../../lib/blocks.js';
 import { AppError } from '../../lib/errors.js';
 import { fromBin, toBin, uuidv7 } from '../../lib/ids.js';
-import { mediaUrl } from '../../lib/media.js';
+import { mediaTypeOf, mediaUrl, requireMedia } from '../../lib/media.js';
 import { relation } from '../../lib/permissions.js';
+import { postPreviews } from '../posts/posts.service.js';
 
 const peerOf = (r) => ({ id: fromBin(r.peer_id), username: r.username, fullName: r.full_name, avatarUrl: mediaUrl(r.avatar_key) });
 
-/** 1:1 chats are unique per pair: dm_key = smaller id || larger id. */
-const dmKey = (a, b) => Buffer.concat([toBin(a), toBin(b)].sort(Buffer.compare));
+/** 1:1 chats are unique per pair: dm_key = "<smaller id>_<larger id>" (readable ids, not encrypted). */
+const dmKey = (a, b) => [toBin(a), toBin(b)].sort().join('_');
+
+const MESSAGE_COLUMNS = 'id, sender_id, body, media_type, storage_key, shared_post_id, created_at';
+
+function toMessage(r, me, previews) {
+  return {
+    id: fromBin(r.id),
+    body: r.body ?? '',
+    mine: !!r.sender_id && fromBin(r.sender_id) === me,
+    createdAt: r.created_at.toISOString(),
+    media: r.storage_key ? { type: r.media_type, url: mediaUrl(r.storage_key) } : null,
+    sharedPost: r.shared_post_id ? (previews.get(fromBin(r.shared_post_id)) ?? { unavailable: true }) : null,
+  };
+}
 
 const CLOSED = () => new AppError(403, 'messages_closed', 'You can’t message this account.');
 const ACTIVE_MS = 5 * 60_000;
@@ -90,7 +104,8 @@ export async function conversations(me, folder = 'inbox') {
   const rows = await q(
     pool,
     `SELECT c.id, c.last_message_at, u.id AS peer_id, u.username, u.full_name, u.avatar_key, me.request_pending,
-            (SELECT m.body FROM messages m WHERE m.conversation_id = c.id AND m.deleted_at IS NULL ORDER BY m.id DESC LIMIT 1) AS last_body,
+            (SELECT CASE WHEN m.shared_post_id IS NOT NULL THEN '📎 Shared a post' WHEN m.media_type = 'image' THEN '📷 Photo' WHEN m.media_type = 'video' THEN '🎥 Video' ELSE m.body END
+               FROM messages m WHERE m.conversation_id = c.id AND m.deleted_at IS NULL ORDER BY m.id DESC LIMIT 1) AS last_body,
             (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.sender_id <> ? AND m.deleted_at IS NULL
                 AND (me.last_read_at IS NULL OR m.created_at > me.last_read_at)) AS unread
        FROM conversation_members me
@@ -116,10 +131,12 @@ export async function thread(me, cid, after) {
 
   const rows = await q(
     pool,
-    `SELECT id, sender_id, body, created_at FROM messages
+    `SELECT ${MESSAGE_COLUMNS} FROM messages
       WHERE conversation_id = ? AND deleted_at IS NULL ${after ? 'AND id > ?' : ''} ORDER BY id DESC LIMIT 100`,
     after ? [toBin(cid), toBin(after)] : [toBin(cid)],
   );
+  // Shared posts are shown as cards, and only if THIS reader may see the post.
+  const previews = await postPreviews(me, [...new Set(rows.filter((r) => r.shared_post_id).map((r) => fromBin(r.shared_post_id)))]);
   await exec(pool, 'UPDATE conversation_members SET last_read_at = NOW(3) WHERE conversation_id = ? AND user_id = ?', [toBin(cid), toBin(me)]);
 
   // Receipts and activity status are mutual, and never shown to someone the other person restricted.
@@ -133,15 +150,20 @@ export async function thread(me, cid, after) {
 
   return {
     peer: peerOf(peer),
-    messages: rows.reverse().map((r) => ({ id: fromBin(r.id), body: r.body ?? '', mine: !!r.sender_id && fromBin(r.sender_id) === me, createdAt: r.created_at.toISOString() })),
+    messages: rows.reverse().map((r) => toMessage(r, me, previews)),
     peerReadAt,
     activity,
     // incoming: someone outside my friends wrote first and waits for my answer; outgoing: I wrote first and am waiting
     request: { incoming: !!mine.request_pending, outgoing: !!peer.request_pending },
+    // false while my first message still waits for them to accept (or the account is gone): the chat shows why instead of an error
+    canSend: peer.status === 'active' && !(peer.request_pending && (peer.left_at || (await sentCount(me, cid)) >= 1)),
   };
 }
 
-export async function send(me, cid, body) {
+const sentCount = async (me, cid) => Number((await q(pool, 'SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND sender_id = ? AND deleted_at IS NULL', [toBin(cid), toBin(me)]))[0].n);
+
+/** A message is text, a photo or video, or a shared post/reel (one of them, with an optional caption/text). */
+export async function send(me, cid, { body, mediaKey, sharedPostId }) {
   const mine = await memberOf(me, cid);
   const peer = await peerOfConversation(me, cid);
   if (!peer || peer.status !== 'active') throw CLOSED();
@@ -152,19 +174,29 @@ export async function send(me, cid, body) {
   if (!mayMessage(theirs.messages_from, rel)) throw new AppError(403, 'messages_closed', 'This person isn’t accepting messages from you.');
 
   // While my first message waits in their Requests folder (or they declined), I cannot send more.
-  if (peer.request_pending) {
-    const [sent] = await q(pool, 'SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND sender_id = ? AND deleted_at IS NULL', [toBin(cid), toBin(me)]);
-    if (Number(sent.n) >= 1 || peer.left_at) throw new AppError(403, 'request_pending', 'Wait for them to accept your message request before sending more.');
+  if (peer.request_pending && ((await sentCount(me, cid)) >= 1 || peer.left_at)) {
+    throw new AppError(403, 'request_pending', 'Wait for them to accept your message request before sending more.');
   }
+
+  let mediaType = null;
+  if (mediaKey) {
+    await requireMedia(mediaKey);
+    mediaType = mediaTypeOf(mediaKey);
+  }
+  if (sharedPostId && !(await postPreviews(me, [sharedPostId])).has(sharedPostId)) throw new AppError(404, 'not_found', 'That post isn’t available.'); // you can only share what you can see
+
   const id = uuidv7();
   await tx(async (c) => {
-    await exec(c, 'INSERT INTO messages (id, conversation_id, sender_id, body) VALUES (?, ?, ?, ?)', [toBin(id), toBin(cid), toBin(me), body]);
+    await exec(c, 'INSERT INTO messages (id, conversation_id, sender_id, body, media_type, storage_key, shared_post_id) VALUES (?, ?, ?, ?, ?, ?, ?)', [
+      toBin(id), toBin(cid), toBin(me), body || null, mediaType, mediaKey ?? null, sharedPostId ? toBin(sharedPostId) : null,
+    ]);
     await exec(c, 'UPDATE conversations SET last_message_at = NOW(3) WHERE id = ?', [toBin(cid)]);
     // Replying to a request accepts it. A restricted sender's messages go to the other person's Requests folder.
     await exec(c, 'UPDATE conversation_members SET last_read_at = NOW(3), request_pending = 0 WHERE conversation_id = ? AND user_id = ?', [toBin(cid), toBin(me)]);
     if (rel.restrictedMe) await exec(c, 'UPDATE conversation_members SET request_pending = 1 WHERE conversation_id = ? AND user_id = ?', [toBin(cid), toBin(peerId)]);
   });
-  return { id, body, mine: true, createdAt: new Date().toISOString() };
+  const [row] = await q(pool, `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = ?`, [toBin(id)]);
+  return toMessage(row, me, await postPreviews(me, sharedPostId ? [sharedPostId] : []));
 }
 
 /** Moves a message request into my inbox. */

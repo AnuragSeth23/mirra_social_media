@@ -22,7 +22,15 @@ const id = (v) => {
   if (typeof v !== 'string' || !isUuid(v)) throw new AppError(404, 'not_found', 'Not found.');
   return v;
 };
-const sendSchema = z.object({ body: z.string().trim().min(1, 'Write a message first.').max(4000, 'That message is too long.') });
+// A message is text, or a photo/video (mediaKey from POST /media, with optional text), or a shared post/reel (sharedPostId, with optional text).
+const sendSchema = z
+  .object({
+    body: z.string().trim().max(4000, 'That message is too long.').optional(),
+    mediaKey: z.string().max(120).optional(),
+    sharedPostId: z.string().uuid().optional(),
+  })
+  .refine((v) => v.body || v.mediaKey || v.sharedPostId, { message: 'Write a message first.', path: ['body'] })
+  .refine((v) => !(v.mediaKey && v.sharedPostId), { message: 'Send a file or a post, not both in one message.', path: ['mediaKey'] });
 
 messagesRouter.get(
   '/',
@@ -52,5 +60,5 @@ messagesRouter.post(
   '/:id',
   messageLimiter,
   validateBody(sendSchema),
-  wrap((req) => svc.send(req.auth.userId, id(req.params.id), req.body.body)),
+  wrap((req) => svc.send(req.auth.userId, id(req.params.id), req.body)),
 );

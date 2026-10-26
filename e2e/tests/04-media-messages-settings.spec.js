@@ -25,7 +25,7 @@ test.describe('Camera, stories, reels, avatar', () => {
     await page.getByRole('button', { name: 'Record video' }).click({ timeout: 15000 });
     await page.waitForTimeout(2500);
     await page.getByRole('button', { name: 'Stop recording' }).click();
-    await expect(page.locator('.modal .composer-preview video')).toBeVisible();
+    await expect(page.locator('.modal .reel-items li video')).toBeVisible(); // a reel lists its photos/videos
     await expect(page.locator('.modal .seg button.on')).toHaveText('Reel'); // a video defaults to a reel
     await page.getByLabel('Caption').fill('My reel');
     await page
@@ -33,9 +33,13 @@ test.describe('Camera, stories, reels, avatar', () => {
       .getByRole('button', { name: /Share reel/ })
       .click();
     await expect(page.locator('.modal')).toHaveCount(0, { timeout: 8000 });
+    // the recorded clip is stored as a reel with one video (checked through the API, so other people's reels cannot confuse the test)
+    const mine = (await api('GET', `/posts/by/${u.username}`, u.token)).json.data.posts[0];
+    expect(mine.kind).toBe('reel');
+    expect(mine.items.map((i) => i.mediaType)).toEqual(['video']);
+    expect(mine.mediaUrl).toMatch(/\/api\/v1\/media\/.+\.(webm|mp4)/);
     await page.goto('/reels');
     await expect(page.locator('.reel').first()).toBeVisible();
-    await expect(page.locator('.reel video').first()).toHaveAttribute('src', /\/api\/v1\/media\/.+\.(webm|mp4)/);
     await ctx.close();
   });
 
@@ -110,10 +114,13 @@ test.describe('Messages', () => {
     await pa.getByRole('button', { name: 'Send' }).click();
     await expect(pa.getByText('Hi Ben, are you there?')).toBeVisible();
 
+    // Mia is not Ben's friend, so her first message waits in his Requests tab; replying accepts it.
     await pb.goto('/messages');
+    await pb.getByRole('tab', { name: /Requests/ }).click();
     await expect(pb.getByText('Hi Ben, are you there?')).toBeVisible();
     await expect(pb.locator('.chat-row .dot')).toHaveText('1');
     await pb.getByRole('link', { name: /Mia/ }).click();
+    await expect(pb.getByRole('button', { name: 'Accept' })).toBeVisible();
     await pb.getByRole('textbox', { name: 'Message' }).fill('Yes Mia!');
     await pb.getByRole('button', { name: 'Send' }).click();
     await expect(pa.getByText('Yes Mia!')).toBeVisible({ timeout: 10000 }); // arrives by polling

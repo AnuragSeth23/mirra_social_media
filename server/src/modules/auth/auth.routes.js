@@ -4,8 +4,9 @@ import { config } from '../../config/env.js';
 import { requireAuth, requireClientHeader } from '../../middleware/auth.js';
 import { codeLimiter, loginLimiter, lookupLimiter, signupLimiter } from '../../middleware/rate-limit.js';
 import { validateBody, validateQuery } from '../../middleware/validate.js';
-import { availabilitySchema, emailSchema, forgotSchema, loginSchema, resetSchema, resendSchema, signupSchema, usernameSchema, verifySchema } from './auth.schemas.js';
+import { availabilitySchema, emailSchema, loginSchema, recoverResetSchema, recoverStartSchema, recoverVerifySchema, resendSchema, signupSchema, usernameSchema, verifySchema } from './auth.schemas.js';
 import * as auth from './auth.service.js';
+import * as recovery from './recovery.service.js';
 
 export const authRouter = Router();
 
@@ -86,21 +87,31 @@ authRouter.post(
   }),
 );
 
+// Forgot password / forgot username: send a code to the email or phone, verify it (returns every account using that contact), reset one.
 authRouter.post(
-  '/forgot',
+  '/recover/start',
   codeLimiter,
-  validateBody(forgotSchema),
+  validateBody(recoverStartSchema),
   wrap(async (req, res) => {
-    res.json({ data: await auth.forgotPassword(req.body.identifier) });
+    res.json({ data: await recovery.start(req.body.identifier, req.body.channel) });
   }),
 );
 
 authRouter.post(
-  '/reset',
+  '/recover/verify',
   codeLimiter,
-  validateBody(resetSchema),
+  validateBody(recoverVerifySchema),
   wrap(async (req, res) => {
-    const result = await auth.resetPassword(req.body.identifier, req.body.code, req.body.password);
+    res.json({ data: await recovery.verify(req.body.ticket, req.body.code) });
+  }),
+);
+
+authRouter.post(
+  '/recover/reset',
+  codeLimiter,
+  validateBody(recoverResetSchema),
+  wrap(async (req, res) => {
+    const result = await recovery.resetPassword(req.body.ticket, req.body.userId, req.body.password);
     res.clearCookie(COOKIE, cookieOptions);
     res.json({ data: result });
   }),

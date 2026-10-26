@@ -6,6 +6,7 @@
  */
 import mysql from 'mysql2/promise';
 import { config } from '../src/config/env.js';
+import { emailIndex } from '../src/lib/crypto.js';
 
 const API = process.env.API_URL ?? 'http://localhost:4000/api/v1';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -14,8 +15,8 @@ const code = async (channel, who) =>
   (
     await db.query(
       `SELECT vc.dev_code FROM verification_codes vc JOIN users u ON u.id = vc.user_id
-      WHERE (u.email = ? OR u.username = ?) AND vc.channel = ? ORDER BY vc.id DESC LIMIT 1`,
-      [who, who, channel],
+      WHERE (u.email_hash = ? OR u.username = ?) AND vc.channel = ? ORDER BY vc.id DESC LIMIT 1`,
+      [emailIndex(who), who, channel],
     )
   )[0][0].dev_code;
 
@@ -37,14 +38,14 @@ async function newUser(tag) {
     email: `c${id}@example.com`,
     phone: `+1415${2 + Math.floor(Math.random() * 8)}${String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')}`,
     password: 'tidepool42',
-    dateOfBirth: '1998-04-12',
+    dateOfBirth: '1998-04-12', verifyVia: tag.charCodeAt(0) % 2 ? 'email' : 'phone',
   };
   const s = await call('POST', '/auth/signup', undefined, u);
   if (s.status !== 201) throw new Error('signup failed ' + JSON.stringify(s.json));
   const ticket = s.json.data.ticket;
   await sleep(150);
-  await call('POST', '/auth/verify', undefined, { ticket, channel: 'email', code: await code('email', u.email) });
-  const v = await call('POST', '/auth/verify', undefined, { ticket, channel: 'phone', code: await code('phone', u.username) });
+  const via = s.json.data.pending[0]; // one code, on the channel this user chose
+  const v = await call('POST', '/auth/verify', undefined, { ticket, channel: via, code: await code(via, u.username) });
   return { id: v.json.data.user.id, token: v.json.data.accessToken, u, ticket };
 }
 
@@ -135,7 +136,7 @@ expect('deleting a comment also removes its replies and fixes the count', delTop
 // ---------- reports
 const rep = await call('POST', '/safety/report', c.token, { targetType: 'post', targetId: pid, reason: 'spam', details: 'looks like spam' });
 const rep2 = await call('POST', '/safety/report', c.token, { targetType: 'post', targetId: pid, reason: 'spam' });
-const [{ n: reports }] = (await db.query("SELECT COUNT(*) AS n FROM reports WHERE target_type='post' AND target_id = UNHEX(REPLACE(?, '-', ''))", [pid]))[0];
+const [{ n: reports }] = (await db.query("SELECT COUNT(*) AS n FROM reports WHERE target_type='post' AND target_id = ?", [pid]))[0];
 expect('a report is stored once even if sent twice', rep.status === 200 && rep2.status === 200 && Number(reports) === 1, reports);
 const selfRep = await call('POST', '/safety/report', a.token, { targetType: 'post', targetId: pid, reason: 'spam' });
 expect("you can't report your own post", selfRep.status === 422, selfRep.json);
@@ -261,9 +262,9 @@ const visibleAgain = await call('GET', `/users/by/${c.u.username}`, a.token);
 expect('signing in again reactivates it', back2.status === 200 && visibleAgain.status === 200, [back2.json, visibleAgain.status]);
 
 // ---------- password reset must not reveal account details before the code is right
-const oracleReal = await call('POST', '/auth/reset', undefined, { identifier: a.u.email, code: '000000', password: `${a.u.username}99` });
-const oracleFake = await call('POST', '/auth/reset', undefined, { identifier: 'nobody.here@example.com', code: '000000', password: 'whatever99' });
-expect('reset with a wrong code answers the same for real and unknown accounts', oracleReal.status === 400 && oracleFake.status === 400 && oracleReal.json.error.code === oracleFake.json.error.code, [
+const oracleReal = await call('POST', '/auth/recover/verify', undefined, { ticket: (await call('POST', '/auth/recover/start', undefined, { identifier: a.u.email })).json.data.ticket, code: '000000' });
+const oracleFake = await call('POST', '/auth/recover/verify', undefined, { ticket: (await call('POST', '/auth/recover/start', undefined, { identifier: 'nobody.here@example.com' })).json.data.ticket, code: '000000' });
+expect('recovery with a wrong code answers the same for real and unknown accounts (same code, same tries left)', oracleReal.status === 400 && oracleFake.status === 400 && oracleReal.json.error.code === oracleFake.json.error.code && oracleReal.json.error.details?.attemptsLeft === oracleFake.json.error.details?.attemptsLeft, [
   oracleReal.json,
   oracleFake.json,
 ]);

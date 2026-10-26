@@ -73,7 +73,8 @@ export function ShareDialog({ post, onClose, onCounted }) {
     setError('');
     try {
       const { id } = await api(`/messages/with/${person.id}`, { method: 'POST' });
-      await api(`/messages/${id}`, { method: 'POST', body: { body: `${text}\n${url}` } });
+      // Sent as the post itself, so the chat shows a card with a preview instead of a pasted link.
+      await api(`/messages/${id}`, { method: 'POST', body: { sharedPostId: post.id } });
       setSent((s) => ({ ...s, [person.id]: true }));
       void count();
     } catch (e) {

@@ -326,7 +326,7 @@ export function Settings() {
             <div>
               <dt>Email</dt>
               <dd>
-                {user.email} {user.emailVerified && <span className="badge">Verified</span>}
+                {user.email ?? <span className="muted">Not added</span>} {user.emailVerified && <span className="badge">Verified</span>}
               </dd>
             </div>
             <div>

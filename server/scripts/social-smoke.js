@@ -4,6 +4,7 @@
  */
 import mysql from 'mysql2/promise';
 import { config } from '../src/config/env.js';
+import { emailIndex } from '../src/lib/crypto.js';
 
 const API = process.env.API_URL ?? 'http://localhost:4000/api/v1';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -13,8 +14,8 @@ const code = async (channel, who) =>
   (
     await db.query(
       `SELECT vc.dev_code FROM verification_codes vc JOIN users u ON u.id = vc.user_id
-      WHERE (u.email = ? OR u.username = ?) AND vc.channel = ? ORDER BY vc.id DESC LIMIT 1`,
-      [who, who, channel],
+      WHERE (u.email_hash = ? OR u.username = ?) AND vc.channel = ? ORDER BY vc.id DESC LIMIT 1`,
+      [emailIndex(who), who, channel],
     )
   )[0][0].dev_code;
 
@@ -35,13 +36,13 @@ async function newUser(tag) {
     email: `t${n}@example.com`,
     phone: `+1415${2 + Math.floor(Math.random() * 8)}${String(Math.floor(Math.random() * 1_000_000)).padStart(6, '0')}`,
     password: 'tidepool42',
-    dateOfBirth: '1998-04-12',
+    dateOfBirth: '1998-04-12', verifyVia: tag.charCodeAt(0) % 2 ? 'email' : 'phone',
   };
   const s = await call('POST', '/auth/signup', undefined, u);
   const ticket = s.json.data.ticket;
   await sleep(300);
-  await call('POST', '/auth/verify', undefined, { ticket, channel: 'email', code: await code('email', u.email) });
-  const v = await call('POST', '/auth/verify', undefined, { ticket, channel: 'phone', code: await code('phone', u.username) });
+  const via = s.json.data.pending[0]; // one code, on the channel this user chose
+  const v = await call('POST', '/auth/verify', undefined, { ticket, channel: via, code: await code(via, u.username) });
   return { id: v.json.data.user.id, token: v.json.data.accessToken, u };
 }
 
@@ -74,7 +75,7 @@ const up = await call('POST', '/media', a.token, undefined, { type: 'image/png',
 expect('png upload returns a key', up.status === 200 && /\.png$/.test(up.json.data.key), up.json);
 const withImg = await call('POST', '/posts', a.token, { caption: '', mediaKey: up.json.data.key });
 expect('photo post is created', withImg.status === 200 && !!withImg.json.data.mediaUrl, withImg.json);
-const served = await fetch(`http://localhost:4000${withImg.json.data.mediaUrl}`);
+const served = await fetch(`${API.replace(/\/api\/v1$/, '')}${withImg.json.data.mediaUrl}`);
 expect('uploaded photo is served', served.status === 200 && served.headers.get('content-type') === 'image/png');
 
 const l1 = await call('PUT', `/posts/${postId}/like`, b.token);
@@ -157,29 +158,35 @@ expect(
   after.json,
 );
 
-// ---- forgot / reset password
-const gen1 = await call('POST', '/auth/forgot', undefined, { identifier: a.u.email });
-const gen2 = await call('POST', '/auth/forgot', undefined, { identifier: 'no.such.user.zz' });
+// ---- forgot / reset password (one flow: a code to the email or phone, verify it, pick the account, set a new password)
+const recoveryCode = async (channel, hash) => (await db.query('SELECT dev_code FROM recovery_requests WHERE channel = ? AND contact_hash = ? ORDER BY created_at DESC LIMIT 1', [channel, hash]))[0][0].dev_code;
+const gen1 = await call('POST', '/auth/recover/start', undefined, { identifier: a.u.email });
+const gen2 = await call('POST', '/auth/recover/start', undefined, { identifier: 'no.such.user.zz' });
 expect(
-  'forgot answers 200 "sent" for real and unknown accounts (apart from the development-only on-screen hint)',
-  gen1.status === 200 && gen2.status === 200 && gen1.json.data.sent === true && gen2.json.data.sent === true,
+  'recover/start answers 200 "sent" with a ticket for real and unknown accounts (apart from the development-only on-screen hint)',
+  gen1.status === 200 && gen2.status === 200 && gen1.json.data.sent === true && gen2.json.data.sent === true && !!gen1.json.data.ticket && !!gen2.json.data.ticket,
   [gen1.json, gen2.json],
 );
 expect(
   'in development the reset code is also returned for the screen, and matches the database',
-  /^\d{6}$/.test(gen1.json.data.dev?.code ?? '') && gen1.json.data.dev.code === (await code('email', a.u.email)),
+  /^\d{6}$/.test(gen1.json.data.dev?.code ?? '') && gen1.json.data.dev.code === (await recoveryCode('email', emailIndex(a.u.email))),
   gen1.json,
 );
 expect('an unknown identifier gets a development note instead of a code', !gen2.json.data.dev?.code && /No account matches/.test(gen2.json.data.dev?.note ?? ''), gen2.json);
 await sleep(300);
-const badReset = await call('POST', '/auth/reset', undefined, { identifier: a.u.email, code: '000000', password: 'brandnew99' });
+const rTicket = gen1.json.data.ticket;
+const badReset = await call('POST', '/auth/recover/verify', undefined, { ticket: rTicket, code: '000000' });
 expect('wrong reset code is rejected and counted', badReset.status === 400 && badReset.json.error.details.attemptsLeft === 4, badReset.json);
-const weak = await call('POST', '/auth/reset', undefined, { identifier: a.u.email, code: await code('email', a.u.email), password: 'short' });
+const early = await call('POST', '/auth/recover/reset', undefined, { ticket: rTicket, userId: a.id, password: 'brandnew99' });
+expect('a password cannot be reset before the code is verified', early.status === 401 && early.json.error.code === 'recovery_expired', early.json);
+const okCode = await call('POST', '/auth/recover/verify', undefined, { ticket: rTicket, code: await recoveryCode('email', emailIndex(a.u.email)) });
+expect('the correct code verifies and lists the account that uses this email', okCode.status === 200 && okCode.json.data.accounts.length === 1 && okCode.json.data.accounts[0].id === a.id && okCode.json.data.accounts[0].username === a.u.username, okCode.json);
+const weak = await call('POST', '/auth/recover/reset', undefined, { ticket: rTicket, userId: a.id, password: 'short' });
 expect('weak new password is rejected', weak.status === 422, weak.json);
-const reset = await call('POST', '/auth/reset', undefined, { identifier: a.u.email, code: await code('email', a.u.email), password: 'brandnew99' });
-expect('correct code resets the password', reset.status === 200 && reset.json.data.reset === true, reset.json);
-const reuse = await call('POST', '/auth/reset', undefined, { identifier: a.u.email, code: await code('email', a.u.email), password: 'another123' });
-expect('a reset code cannot be used twice', reuse.status === 400, reuse.json);
+const other = await call('POST', '/auth/recover/reset', undefined, { ticket: rTicket, userId: b.id, password: 'brandnew99' });
+expect('a verified email cannot reset an account that does not use it', other.status === 403, other.json);
+const reset = await call('POST', '/auth/recover/reset', undefined, { ticket: rTicket, userId: a.id, password: 'brandnew99' });
+expect('the verified contact can reset its account password', reset.status === 200 && reset.json.data.reset === true, reset.json);
 const oldPw = await call('POST', '/auth/login', undefined, { identifier: a.u.email, password: a.u.password });
 const newPw = await call('POST', '/auth/login', undefined, { identifier: a.u.username, password: 'brandnew99' });
 expect('old password stops working, new one works', oldPw.status === 401 && newPw.status === 200, [oldPw.json, newPw.json]);
@@ -197,16 +204,29 @@ expect('fake video bytes are rejected', textAsVideo.status === 415, textAsVideo.
 const reelNoVideo = await call('POST', '/posts', aT, { caption: 'x', kind: 'reel' });
 expect('reel without a video is rejected', reelNoVideo.status === 422, reelNoVideo.json);
 const reelWithImage = await call('POST', '/posts', aT, { caption: 'x', kind: 'reel', mediaKey: up.json.data.key });
-expect('reel with an image is rejected', reelWithImage.status === 422, reelWithImage.json);
+expect('a reel can be a single photo, shown for 5 seconds by default', reelWithImage.status === 200 && reelWithImage.json.data.mediaType === 'image' && reelWithImage.json.data.items.length === 1 && reelWithImage.json.data.items[0].durationMs === 5000, reelWithImage.json);
 const reel = await call('POST', '/posts', aT, { caption: 'my reel', kind: 'reel', mediaKey: vup.json.data.key });
 expect('reel is created', reel.status === 200 && reel.json.data.kind === 'reel' && reel.json.data.mediaType === 'video', reel.json);
+expect('a video in a reel has no fixed time (it plays for its own length)', reel.json.data.items.length === 1 && reel.json.data.items[0].durationMs === null, reel.json);
+const multi = await call('POST', '/posts', aT, { caption: 'multi', kind: 'reel', items: [{ key: up.json.data.key, durationMs: 3000 }, { key: vup.json.data.key }, { key: up.json.data.key }] });
+const mi = multi.json?.data?.items ?? [];
+expect('a reel can mix several photos and videos, in order, each photo with its own time', multi.status === 200 && mi.length === 3 && mi[0].mediaType === 'image' && mi[0].durationMs === 3000 && mi[1].mediaType === 'video' && mi[1].durationMs === null && mi[2].durationMs === 5000 && multi.json.data.mediaUrl === mi[0].mediaUrl, multi.json);
+const tooLong = await call('POST', '/posts', aT, { caption: 'x', kind: 'reel', items: [{ key: up.json.data.key, durationMs: 31000 }] });
+const tooShort = await call('POST', '/posts', aT, { caption: 'x', kind: 'reel', items: [{ key: up.json.data.key, durationMs: 500 }] });
+expect('a photo can show for 1 to 30 seconds only (422 outside that)', tooLong.status === 422 && tooShort.status === 422, [tooLong.json, tooShort.json]);
+const eleven = await call('POST', '/posts', aT, { caption: 'x', kind: 'reel', items: Array.from({ length: 11 }, () => ({ key: up.json.data.key })) });
+expect('a reel has at most 10 photos and videos (422)', eleven.status === 422, eleven.json);
+const twoInPost = await call('POST', '/posts', aT, { caption: 'x', items: [{ key: up.json.data.key }, { key: up.json.data.key }] });
+expect('an ordinary post cannot have several photos (422): only reels can', twoInPost.status === 422 && twoInPost.json.error.code === 'too_many_media', twoInPost.json);
+const ghostItem = await call('POST', '/posts', aT, { caption: 'x', kind: 'reel', items: [{ key: '00000000-0000-7000-8000-000000000000.png' }] });
+expect('a file that was never uploaded cannot be put in a reel (422)', ghostItem.status === 422, ghostItem.json);
 const reels = await call('GET', '/posts/reels', b.token);
 expect(
   'reels feed shows it to another user',
   reels.json.data.posts.some((p) => p.id === reel.json.data.id),
   reels.json,
 );
-const vserved = await fetch(`http://localhost:4000${reel.json.data.mediaUrl}`, { headers: { Range: 'bytes=0-9' } });
+const vserved = await fetch(`${API.replace(/\/api\/v1$/, '')}${reel.json.data.mediaUrl}`, { headers: { Range: 'bytes=0-9' } });
 expect('video is served with Range support (206)', vserved.status === 206, vserved.status);
 const exp = await call('GET', '/posts/explore', b.token);
 expect('explore lists public media posts from others', exp.status === 200 && exp.json.data.posts.length >= 2 && exp.json.data.posts.every((p) => !p.mine && p.mediaUrl), exp.json);

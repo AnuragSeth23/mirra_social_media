@@ -5,9 +5,12 @@ Three layers, all automated. Start the app first (`run.bat`), then `test-all.bat
 | Layer | Where | Count | Needs |
 | --- | --- | --- | --- |
 | API: auth | `server/scripts/smoke.js` | 20 | API + database |
-| API: features | `server/scripts/social-smoke.js` | 70 | API + database |
+| API: features | `server/scripts/social-smoke.js` | 78 | API + database |
 | API: extended | `server/scripts/complete-smoke.js` | 71 | API + database |
-| Browser (Playwright, Chrome) | `e2e/tests/*.spec.js` | 48 | API + web + Google Chrome |
+| API: privacy and security | `server/scripts/privacy-smoke.js` | 176 | API + database |
+| API: sign-up code choice and account recovery | `server/scripts/recovery-smoke.js` | 51 | API + database |
+| API: chat (requests, photos/videos, shared posts) | `server/scripts/chat-smoke.js` | 26 | API + database |
+| Browser (Playwright, Chrome) | `e2e/tests/*.spec.js` | 64 | API + web + Google Chrome |
 
 The API suites read one-time codes from `verification_codes.dev_code` (filled in development only). The browser suite uses a fake camera and microphone, so it runs without hardware. Run the browser suite against another address with `WEB_URL=http://localhost:5174`.
 
@@ -15,7 +18,15 @@ For tests, put `DISABLE_RATE_LIMITS=1` in `server/.env`. The app refuses to star
 
 ## Case list
 
-**Sign-up and sign-in**: empty and invalid form errors · valid sign-up with email then phone code · wrong code counted (attempts left) · sign-in by username, email and phone · wrong password and unknown account give the same message · forgot password with code and new password · old password stops working · reset code single-use · unknown account and real account answer the same on reset · back buttons · protected pages redirect to sign-in · 404 page · impossible birth date (31 Feb) rejected.
+**Sign-up and sign-in**: empty and invalid form errors · sign-up with ONE code, on the phone (default) or on the email, never both · username box has no `@` and cleans `@`, spaces and capitals · wrong code counted (attempts left) · sign-in by username, email and phone · a phone number shared by several accounts (the password picks the account, at most 5 accounts) · sign-in page: no browser pre-fill, no hint, last username suggested · wrong password and unknown account give the same message · back buttons · protected pages redirect to sign-in · 404 page · impossible birth date (31 Feb) rejected.
+
+**Forgot password and forgot username**: code to the email or phone (a username chooses which) · a phone number lists every account that uses it, and any one can be reset · nothing resets before the code is verified · a verified contact cannot reset an account it does not own · 15-minute reset window · suspended accounts not listed · old password stops working and old sessions end · unknown and real identifiers answer the same, with the same try-limits · at most 5 codes per contact per hour · sign-up, recovery and 2FA tickets cannot be mixed up · the code can be shown on screen in development.
+
+**Chat**: first message to a non-friend is a request (Requests tab, Accept or Decline, replying accepts) · the sender sees "Message request sent..." instead of an error · photo and video messages with preview · a shared post or reel is a card, built for the reader (hidden posts turn into "no longer available") · you cannot share a post you cannot see · back button inside the chat.
+
+**Reels**: several photos and videos in one reel · a photo defaults to 5 s, 1 to 30 s allowed, − / + · reorder and remove · at most 10 items · the reel frame takes the picture's shape (nothing cropped) · progress bar per item · like / comment / share on a dark pad inside the frame · back button on the reel · only the author under the picture · double-click refreshes Home and Reels.
+
+**The SocialAmbak logo** is never underlined and goes to Home.
 
 **Sessions and security**: refresh cookie httpOnly and strict · refresh rotation · replayed refresh token revokes the family · logout and logout-everywhere · a finished sign-up ticket cannot mint a session · password change keeps this device and signs out others · `javascript:`, `data:`, `ftp:` profile links rejected · fake image and video bytes rejected · media type decided from file bytes.
 
