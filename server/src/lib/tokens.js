@@ -31,6 +31,11 @@ export function signTwoFactorTicket(userId) {
   return jwt.sign({ typ: '2fa' }, config.JWT_ACCESS_SECRET, { algorithm: 'HS256', subject: userId, issuer: ISSUER, audience: AUDIENCE, expiresIn: '5m' });
 }
 
+/** Names one account-recovery request (its id is the subject). It proves nothing by itself: the code must still be verified server side. */
+export function signRecoveryTicket(requestId) {
+  return jwt.sign({ typ: 'recover' }, config.JWT_ACCESS_SECRET, { algorithm: 'HS256', subject: requestId, issuer: ISSUER, audience: AUDIENCE, expiresIn: '30m' });
+}
+
 function verifyToken(token, typ, expiredCode) {
   try {
     const claims = jwt.verify(token, config.JWT_ACCESS_SECRET, {
@@ -49,3 +54,4 @@ function verifyToken(token, typ, expiredCode) {
 export const verifyAccessToken = (t) => verifyToken(t, 'access', 'token_expired');
 export const verifyTicket = (t) => verifyToken(t, 'verify', 'ticket_expired');
 export const verifyTwoFactorTicket = (t) => verifyToken(t, '2fa', 'ticket_expired');
+export const verifyRecoveryTicket = (t) => verifyToken(t, 'recover', 'ticket_expired');

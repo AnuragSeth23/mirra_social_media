@@ -15,7 +15,9 @@
     "smoke:social": "node scripts/social-smoke.js",
     "smoke:complete": "node scripts/complete-smoke.js",
     "smoke:privacy": "node scripts/privacy-smoke.js",
-    "test:api": "npm run check && npm run smoke && npm run smoke:social && npm run smoke:complete && npm run smoke:privacy",
+    "smoke:recovery": "node scripts/recovery-smoke.js",
+    "smoke:chat": "node scripts/chat-smoke.js",
+    "test:api": "npm run check && npm run smoke && npm run smoke:social && npm run smoke:complete && npm run smoke:privacy && npm run smoke:recovery && npm run smoke:chat",
     "gen:keys": "node -e \"for (const k of ['JWT_ACCESS_SECRET','PHONE_ENC_KEY','PHONE_HASH_KEY','OTP_HASH_KEY']) console.log(k + '=' + require('crypto').randomBytes(32).toString('hex'))\""
   },
   "dependencies": {

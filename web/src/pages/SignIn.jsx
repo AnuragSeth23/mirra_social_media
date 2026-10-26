@@ -5,6 +5,7 @@ import { AuthShell } from '../components/AuthShell';
 import { Button, Field, FormAlert, PasswordField } from '../components/ui';
 import { api, ApiError } from '../lib/api';
 import { savePending } from '../lib/pending';
+import { clearSignInId, getSignInId, saveSignInId } from '../lib/signinId';
 
 export function SignIn() {
   const { acceptSession } = useAuth();
@@ -12,6 +13,7 @@ export function SignIn() {
   const notice = useLocation().state?.notice;
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [suggested, setSuggested] = useState(getSignInId); // username used or created last on this device
   const [errors, setErrors] = useState({});
   const [formError, setFormError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -29,6 +31,7 @@ export function SignIn() {
     try {
       const session = await api('/auth/login', { method: 'POST', body: { identifier, password }, auth: false });
       acceptSession(session);
+      if (session.user?.username) saveSignInId(session.user.username);
       navigate('/', { replace: true });
     } catch (err) {
       if (err instanceof ApiError && err.code === 'verification_required') {
@@ -66,15 +69,33 @@ export function SignIn() {
           value={identifier}
           onChange={(e) => setIdentifier(e.target.value)}
           error={errors.identifier}
-          hint="For phone, include the country code, like +1 415 555 0123."
-          autoComplete="username"
+          autoComplete="off" // the browser must not pre-fill a saved login here
           autoCapitalize="none"
           spellCheck={false}
           autoFocus
         />
-        <PasswordField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} error={errors.password} autoComplete="current-password" />
+        {suggested && !identifier && (
+          <p className="fine">
+            Your sign-in ID:{' '}
+            <button type="button" className="link-btn" onClick={() => setIdentifier(suggested)}>
+              @{suggested}
+            </button>{' '}
+            ·{' '}
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() => {
+                clearSignInId();
+                setSuggested('');
+              }}
+            >
+              Not you?
+            </button>
+          </p>
+        )}
+        <PasswordField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} error={errors.password} autoComplete="new-password" />
         <p className="fine">
-          <Link to="/forgot">Forgot password?</Link>
+          <Link to="/forgot">Forgot password or username?</Link>
         </p>
         <Button type="submit" busy={busy}>
           {busy ? 'Signing in' : 'Sign in'}

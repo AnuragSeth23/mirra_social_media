@@ -1,5 +1,5 @@
 import { exec, pool, q, tx } from '../../db/pool.js';
-import { decryptField } from '../../lib/crypto.js';
+import { decryptField, emailAad, emailIndex } from '../../lib/crypto.js';
 import { AppError } from '../../lib/errors.js';
 import { fromBin, toBin } from '../../lib/ids.js';
 import { maskPhone } from '../../lib/phone.js';
@@ -15,7 +15,7 @@ import { notify } from '../notifications/notifications.service.js';
 export async function getProfile(userId) {
   const rows = await q(
     pool,
-    `SELECT username, full_name, email, phone_ciphertext, phone_key_version, bio, website, avatar_key, is_private,
+    `SELECT username, full_name, email_ciphertext, email_key_version, phone_ciphertext, phone_key_version, bio, website, avatar_key, is_private,
             followers_count, following_count, posts_count, email_verified_at, phone_verified_at, created_at
        FROM users WHERE id = ? AND deleted_at IS NULL`,
     [toBin(userId)],
@@ -26,7 +26,7 @@ export async function getProfile(userId) {
     id: userId,
     username: u.username,
     fullName: u.full_name,
-    email: u.email,
+    email: u.email_ciphertext ? decryptField(u.email_ciphertext, emailAad(userId), u.email_key_version) : null, // optional: none if the account signed up with a phone only
     phoneMasked: maskPhone(decryptField(u.phone_ciphertext, `users.phone:${userId}`, u.phone_key_version)),
     bio: u.bio,
     website: u.website,
@@ -73,7 +73,7 @@ async function findByUsername(me, username) {
   const rows = await q(
     pool,
     `SELECT u.id, u.username, u.full_name, u.avatar_key, u.bio, u.website, u.is_private, u.followers_count, u.following_count, u.posts_count,
-            u.email, u.phone_ciphertext, u.phone_key_version, u.date_of_birth, ${REL},
+            u.email_ciphertext, u.email_key_version, u.phone_ciphertext, u.phone_key_version, u.date_of_birth, ${REL},
             EXISTS (SELECT 1 FROM blocks b WHERE b.blocker_id = ? AND b.blocked_id = u.id) AS i_blocked,
             EXISTS (SELECT 1 FROM blocks b WHERE b.blocker_id = u.id AND b.blocked_id = ?) AS blocked_me
        FROM users u WHERE u.username = ? AND u.status = 'active' AND u.deleted_at IS NULL`,
@@ -104,7 +104,7 @@ export async function publicProfile(me, username) {
     avatarUrl: mediaUrl(r.avatar_key),
     bio: show(privacy.show_details) ? r.bio : '',
     website: show(privacy.show_details) ? r.website : null,
-    email: show(privacy.show_email) ? r.email : null,
+    email: show(privacy.show_email) && r.email_ciphertext ? decryptField(r.email_ciphertext, emailAad(id), r.email_key_version) : null,
     phone: show(privacy.show_phone) ? decryptField(r.phone_ciphertext, `users.phone:${id}`, r.phone_key_version) : null,
     birthday: show(privacy.show_birthday) ? new Date(r.date_of_birth).toISOString().slice(0, 10) : null,
     detailsHidden: !show(privacy.show_details),
@@ -184,7 +184,7 @@ export async function setFollow(me, target, follow) {
 /** Looks like an email address, or like a phone number someone typed? Then search that exact value instead of names. */
 function contactQuery(raw) {
   const text = raw.trim();
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(text)) return { kind: 'email', email: text.toLowerCase() };
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(text)) return { kind: 'email', hash: emailIndex(text) };
   const digits = text.replace(/\D/g, '');
   const e164 = text.startsWith('+') ? normalizePhone(text) : digits.length === 10 && /^[6-9]/.test(digits) ? normalizePhone(`+91${digits}`) : null;
   return e164 ? { kind: 'phone', hash: blindIndex(e164) } : null;
@@ -197,7 +197,7 @@ function contactQuery(raw) {
 export async function search(me, text) {
   const contact = contactQuery(text);
   if (contact) {
-    const column = contact.kind === 'email' ? 'u.email' : 'u.phone_hash';
+    const column = contact.kind === 'email' ? 'u.email_hash' : 'u.phone_hash';
     const setting = contact.kind === 'email' ? 'find_by_email' : 'find_by_phone';
     const rows = await q(
       pool,
@@ -205,8 +205,8 @@ export async function search(me, text) {
          LEFT JOIN user_privacy up ON up.user_id = u.id
         WHERE ${column} = ? AND u.status = 'active' AND u.deleted_at IS NULL AND u.id <> ? AND ${NOT_BLOCKED('u.id')}
           AND (COALESCE(up.${setting}, 'nobody') = 'everyone' OR (COALESCE(up.${setting}, 'nobody') = 'friends' AND ${FRIENDS_SQL('?', 'u.id')}))
-        LIMIT 1`,
-      [toBin(me), toBin(me), contact.kind === 'email' ? contact.email : contact.hash, toBin(me), toBin(me), toBin(me), toBin(me), toBin(me)],
+        LIMIT 5`, // an email is one account; a mobile number may be shared by a few
+      [toBin(me), toBin(me), contact.hash, toBin(me), toBin(me), toBin(me), toBin(me), toBin(me)],
     );
     return rows.map(toPerson);
   }

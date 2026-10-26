@@ -107,22 +107,22 @@ socialambak/
 
 ## 4. The database (MySQL), and the choices behind it
 
-**26 tables**, grouped:
-- **People:** `users`, `user_settings`, `sessions`, `verification_codes`
-- **Graph:** `follows` (status `pending` or `accepted`), `blocks`, `mutes`
-- **Content:** `posts` (kind `post` or `reel`), `post_media`, `hashtags`, `post_hashtags`, `post_likes`, `comments` (with `parent_id` for replies), `saved_posts`, `stories`, `story_views`
-- **Chat and alerts:** `conversations`, `conversation_members`, `messages`, `notifications`
-- **Safety and logs:** `reports`, `activity_log`
+**33 tables**, grouped (the full column list is in `docs/FEATURES_AND_DATA.md`):
+- **People:** `users`, `user_settings`, `user_privacy`, `sessions`, `verification_codes`, `recovery_requests`, `backup_codes`
+- **Graph:** `follows` (status `pending` or `accepted`), `friendships`, `blocks`, `mutes`, `restrictions`
+- **Content:** `posts` (kind `post` or `reel`), `post_media` (a reel has several rows, one per photo/video, in `position` order; a photo's `duration_ms`), `hashtags`, `post_hashtags`, `post_mentions`, `post_tags`, `post_likes`, `comments` (with `parent_id` for replies), `comment_likes`, `saved_posts`, `saved_collections`, `stories`, `story_views`, `search_history`
+- **Chat and alerts:** `conversations`, `conversation_members`, `messages` (text, a photo/video, or a shared post), `notifications`
+- **Safety and logs:** `reports`, `activity_log`, `schema_migrations`
 - Tables created but not used by any screen yet: `mutes`, `post_mentions`, `comment_likes`, `saved_collections`, `search_history` (the schema was designed ahead of the features, say this honestly if asked).
 
 Key design decisions:
 
-1. **IDs are UUIDv7 stored as `BINARY(16)`.** v7 starts with a timestamp, so new rows go to the end of the index (fast inserts) and ids are not guessable like 1, 2, 3. They also sort by time, which gives us **cursor pagination**: "give me posts with id smaller than X".
+1. **IDs are UUIDv7 stored as readable text, `CHAR(36)`, and are never encrypted.** An id is an identifier, not a secret, and keeping it readable means you can search it in any database client (`WHERE id = '01a1680e-...'`). v7 starts with a timestamp, so new rows go to the end of the index (fast inserts) and ids are not guessable like 1, 2, 3. They also sort by time (text and bytes sort the same way), which gives us **cursor pagination**: "give me posts with id smaller than X". (They were `BINARY(16)` at first; migration 007 converted all 68 id columns without losing a row.)
 2. **Counters are stored on the row** (`like_count`, `comment_count`, `followers_count`...). Reading is instant. They are updated in the **same transaction** as the action, and only when a row really changed (`INSERT IGNORE` / `affectedRows`), so a double click cannot count twice.
 3. **Soft delete** (`deleted_at`) for posts, comments and users, so history is not lost and counts can be fixed.
 4. **Everything in UTC** (`DATETIME(3)`), the app sets the connection time zone to `+00:00`.
 5. **`utf8mb4` and `utf8mb4_0900_ai_ci`:** emoji work, and usernames/emails compare case-insensitively.
-6. **Phone numbers are never stored in plain text:** `phone_ciphertext` (AES-256-GCM) and `phone_hash` (HMAC "blind index") so we can find a user by phone without being able to read it.
+6. **Phone numbers and emails are never stored in plain text:** `phone_ciphertext` / `email_ciphertext` (AES-256-GCM, tied to the user id) and `phone_hash` / `email_hash` (HMAC "blind index") so we can find a user by phone or email without being able to read it. Every ciphertext, hash and token hash is stored as lowercase **hex text** (`CHAR`/`VARCHAR`), so a database client shows it like `password_hash` and not as "BLOB". Several accounts may share one phone (up to 5); an email belongs to one account.
 7. **Migrations:** plain `.sql` files applied in name order; the table `schema_migrations` remembers which ran. Never edit an applied migration's SQL; add a new file.
 8. **Transactions** (`tx()`) wrap anything that changes more than one table (posting, liking, following, blocking, deleting).
 
@@ -131,11 +131,11 @@ Key design decisions:
 ## 5. How the important flows work (be ready to draw these)
 
 ### 5.1 Sign-up and verification
-1. Browser sends name, username, email, phone, password, birth date. zod validates (username 3-30 chars, password 8+ with a letter and a number, age 13+, real calendar date).
-2. Server hashes the password with **argon2id**, encrypts the phone with AES-GCM, stores the user as `pending_verification`.
-3. Two 6-digit codes are created (email and phone). **Only an HMAC of each code is stored**, plus the plain code in `dev_code` in development only (so a developer can read it in the table). In development the code is also printed in the API window; real email/SMS would plug into `lib/otp-delivery.js`.
+1. Browser sends name, username, email, phone, password, birth date and **where the code should go (`verifyVia`: phone or email)**, like Instagram / Facebook. zod validates (username 3-30 chars, small letters/numbers/`.`/`_`, password 8+ with a letter and a number, age 13+, real calendar date). The username box has no `@`; it drops an `@`, spaces and capitals as you type.
+2. Server hashes the password with **argon2id**, encrypts the phone and the email with AES-GCM (plus their blind-index hashes), stores the user as `pending_verification` with `signup_channel` = the choice. A mobile number may be used by up to 5 accounts. **The email is optional** (an account can be phone-only: `email_ciphertext` / `email_hash` stay empty); it is required only when the code is to be sent to the email, and an email that is given must be new.
+3. **One** 6-digit code is created, for the chosen channel only. **Only an HMAC of the code is stored**, plus the plain code in `dev_code` in development only (so a developer can read it in the table). In development the code is also printed in the API window; real email/SMS would plug into `lib/otp-delivery.js`.
 4. The server returns a **ticket** (a signed token valid 30 minutes) that only says "this browser started sign-up for user X".
-5. User enters the email code, then the phone code. Each code: 10 minutes, 5 attempts, constant-time comparison. When both are done the account becomes `active` and a session starts.
+5. The user enters that one code (10 minutes, 5 attempts, constant-time comparison). The chosen contact becomes verified, the account becomes `active` and a session starts. The other contact stays saved but unverified. Signing in before verifying re-sends the code to the same channel.
 6. A ticket alone can never log someone in (this was a bug the review found and we fixed).
 
 ### 5.2 Login and sessions (the most asked topic)
@@ -162,7 +162,7 @@ One SQL fragment (`VISIBLE`) is used by every post query. A post is visible if: 
 On a computer (1024 px and wider) the navigation is a fixed **left sidebar** (Home, Search, Create, Reels, Activity, Messages, Profile, Settings, your name and Log out). The feed is in the middle. From 1100 px a **right-hand rail** holds your name and "People to follow". On narrower screens the rail disappears and the same suggestions become a swipeable strip inside the feed; on a phone the sidebar becomes a top bar plus a **bottom tab bar**. It is one set of components and CSS media queries, no separate mobile app. The Home page decides where the suggestions live with a small hook (`useWide(1100)`).
 
 ### 5.4d Share
-The Share button opens a pop-up (`ShareDialog`): a copy-link button that visibly turns into "Copied", links that open WhatsApp, Facebook, X, Telegram or your email program with the post link filled in, the phone's own share sheet on touch devices, and "send to a friend" which creates a chat message containing the link (chat messages turn links into clickable links, safely, without using HTML). The share counter goes up once per pop-up, the first time something is really shared.
+The Share button opens a pop-up (`ShareDialog`): a copy-link button that visibly turns into "Copied", links that open WhatsApp, Facebook, X, Telegram or your email program with the post link filled in, the phone's own share sheet on touch devices, and "send to a friend", which sends the post itself as a **card** in the chat (`messages.shared_post_id`): a preview with the picture, the author and the caption, opening the post when tapped. The card is built for whoever is reading: if they may not see the post (it became private, was deleted, or they are blocked) they get "This post is no longer available" and nothing about it. You can only share a post you can see. The share counter goes up once per pop-up, the first time something is really shared.
 
 ### 5.5 Follow, private accounts, requests
 Following a public account is `accepted` at once. Following a private account creates `pending` plus a notification; the owner accepts or declines in Activity. Accepting moves both counters in the same transaction. If the account turns public, waiting requests are accepted automatically.
@@ -172,17 +172,22 @@ Blocking inserts into `blocks`, removes follows in both directions (and fixes co
 
 ### 5.7 Stories, reels, camera
 - **Story:** a row with `expires_at = now + 24h`; the tray query shows only live stories of me and people I follow. Viewing is recorded once per viewer.
-- **Reel:** a post with `kind = 'reel'` and a video; the Reels page uses scroll-snap and an `IntersectionObserver` so only the visible video plays.
+- **Reel:** a post with `kind = 'reel'` and **1 to 10 photos and/or videos**, played one after another (`post_media` rows in `position` order). A photo shows for 5 seconds unless the author changes it with − / + (1 to 30 s, stored in `duration_ms`); a video plays for its own length. In the composer the files can be reordered and removed. The Reels page uses scroll-snap and an `IntersectionObserver` so only the reel on screen plays (and it restarts from its first item when it comes back), shows one progress bar per item, and a tap pauses. The reel frame takes the shape of the first photo/video (never cropped), the like / comment / share / save buttons sit on a dark pad so they stay visible over a white photo, and there is a back button on the reel. Only the author's name shows under the picture, not the caption.
 - **Camera:** `getUserMedia` opens the camera, a canvas takes a still photo, `MediaRecorder` records video (WebM in Chrome, MP4 in Safari) up to 60 s. If you close the camera while recording, the clip is discarded.
 
 ### 5.8 Chat
-Each pair gets one conversation (unique `dm_key` = the two ids sorted). The page asks for new messages every 4 seconds (**polling**), and pauses when the tab is hidden. A real-time version would use WebSockets (Socket.IO).
+Each pair gets one conversation (unique `dm_key` = the two ids sorted). A message is text, a **photo or video** (uploaded first, then sent by key), or a **shared post/reel card**. The page asks for new messages every 4 seconds (**polling**), and pauses when the tab is hidden. A real-time version would use WebSockets (Socket.IO).
+**Message requests (why a second message can wait):** if the person is not your friend, your first message lands in their *Requests* folder and you may send only that one until they accept (or reply). The chat then closes the composer and says "Message request sent... you can send more once they do" instead of showing an error (`canSend` in the thread answer). The chat has its own back button.
 
 ### 5.9 Notifications
 Created in the same transaction as the action (like, comment, reply, follow, request, accepted). Never for your own actions, never across a block, and they respect your notification settings. The red badge polls every 30 s.
 
-### 5.10 Forgot password
-Ask for a code (answer is always the same, so nobody can discover which emails exist) -> enter code + new password -> password changes, **all sessions are revoked**.
+### 5.10 Forgot password and forgot username (one flow)
+1. **Find your account:** type a username, an email or a mobile number. For a username you choose whether the code goes to its email or its phone; an email or phone already says where.
+2. **Code:** a 6-digit code (10 minutes, 5 tries, at most 5 codes per contact per hour, one per minute). The request belongs to the **contact** (`recovery_requests`), not to one account. The answer is always the same, so nobody can discover which accounts exist: an unknown identifier gets a request nobody can complete, with the same try-limits.
+3. **Accounts:** a correct code proves the email/phone and lists **every account that uses it** (a number can be shared by up to 5): sign in as one (the username is remembered and suggested on the sign-in page), or reset its password. Suspended accounts are not listed.
+4. **Reset:** within 15 minutes of the code, pick an account and set a new password; that account's **sessions are all revoked**.
+Signing in with a shared phone number works too: the password says which account is meant (if two accounts share number and password you are asked to use the username).
 
 ---
 

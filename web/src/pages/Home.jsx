@@ -9,10 +9,12 @@ import { Suggestions } from '../components/Suggestions';
 import { Avatar } from '../components/Avatar';
 import { Topbar } from '../components/Topbar';
 import { useWide } from '../lib/useWide';
+import { useDoubleClickRefresh } from '../lib/doubleClickRefresh';
 import { Button } from '../components/ui';
 import { api, ApiError } from '../lib/api';
 
 export function Home() {
+  useDoubleClickRefresh(); // double-click on an empty part of the page reloads the feed
   const { user, refreshUser } = useAuth();
   const [posts, setPosts] = useState([]);
   const [cursor, setCursor] = useState(null);

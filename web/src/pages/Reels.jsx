@@ -1,29 +1,48 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Avatar } from '../components/Avatar';
+import { BackButton } from '../components/BackButton';
 import { BookmarkIcon, CommentIcon, HeartIcon, MuteIcon, ShareIcon } from '../components/Icons';
 import { Topbar } from '../components/Topbar';
 import { api } from '../lib/api';
+import { useDoubleClickRefresh } from '../lib/doubleClickRefresh';
 import { ShareDialog } from '../components/ShareDialog';
+
+const DEFAULT_PHOTO_MS = 5000;
+// The reel frame takes the shape of its first photo or video (never cropped), so the name and buttons sit ON the picture, not on black bars.
+// Very tall or very wide shapes are limited so the frame stays usable; the picture is then shown whole inside it.
+const ratioOf = (w, h) => (w && h ? Math.min(1.78, Math.max(0.3, w / h)) : null);
 
 function Reel({ post, muted, onMute, onChange }) {
   const box = useRef(null);
   const video = useRef(null);
   const [note, setNote] = useState('');
   const [sharing, setSharing] = useState(false);
+  // A reel is one or more photos/videos played one after another (older reels have just the one).
+  const items = post.items?.length ? post.items : [{ mediaUrl: post.mediaUrl, mediaType: post.mediaType, durationMs: null }];
+  const many = items.length > 1;
+  const [index, setIndex] = useState(0);
+  const [active, setActive] = useState(false); // this reel is the one mostly on screen
+  const [paused, setPaused] = useState(false);
+  const [videoPct, setVideoPct] = useState(0);
+  const [ratio, setRatio] = useState(null); // width / height of the first item
+  const item = items[Math.min(index, items.length - 1)];
+  const next = useCallback(() => setIndex((i) => (i + 1) % items.length), [items.length]);
+  // The first item decides the frame's shape. The size is read from the element BEFORE this is called: React clears
+  // event.currentTarget once the handler returns, so it must never be read inside a state-update function.
+  const keepShape = (shape) => setRatio((current) => current ?? shape);
 
-  // Play only the reel that is mostly on screen.
+  // Only the reel that is mostly on screen plays; when it leaves the screen it starts again from its first item.
   useEffect(() => {
     const el = box.current;
     if (!el) return;
     const io = new IntersectionObserver(
       ([e]) => {
-        const v = video.current;
-        if (!v) return;
-        if (e.isIntersecting) void v.play().catch(() => {});
-        else {
-          v.pause();
-          v.currentTime = 0;
+        setActive(e.isIntersecting);
+        if (!e.isIntersecting) {
+          setIndex(0);
+          setPaused(false);
+          setVideoPct(0);
         }
       },
       { threshold: 0.65 },
@@ -31,6 +50,23 @@ function Reel({ post, muted, onMute, onChange }) {
     io.observe(el);
     return () => io.disconnect();
   }, []);
+
+  // A photo moves on after its time (5 s unless the author chose another); a video moves on when it ends.
+  useEffect(() => {
+    if (!active || paused || item.mediaType !== 'image') return;
+    const t = setTimeout(next, item.durationMs ?? DEFAULT_PHOTO_MS);
+    return () => clearTimeout(t);
+  }, [active, paused, index, item.mediaType, item.durationMs, next]);
+
+  useEffect(() => {
+    const v = video.current;
+    if (!v) return;
+    if (active && !paused) void v.play().catch(() => {});
+    else {
+      v.pause();
+      if (!active) v.currentTime = 0;
+    }
+  }, [active, paused, index]);
 
   const flash = (m) => {
     setNote(m);
@@ -59,14 +95,53 @@ function Reel({ post, muted, onMute, onChange }) {
   const share = () => setSharing(true);
 
   return (
-    <article className="reel" ref={box}>
-      <video ref={video} src={post.mediaUrl} loop muted={muted} playsInline preload="metadata" onClick={(e) => (e.currentTarget.paused ? void e.currentTarget.play() : e.currentTarget.pause())} />
+    <article className="reel" ref={box} style={ratio ? { aspectRatio: String(ratio), width: 'auto', maxWidth: 'min(480px, 100%)' } : undefined}>
+      <div className="reel-back">
+        <BackButton label="Back" />
+      </div>
+      {many && (
+        <div className="reel-bars" aria-hidden>
+          {items.map((it, i) => (
+            <i key={i} className={i < index ? 'done' : ''}>
+              {i === index &&
+                (it.mediaType === 'video' ? (
+                  <b style={{ width: `${videoPct * 100}%` }} />
+                ) : (
+                  <b className="run" style={{ animationDuration: `${it.durationMs ?? DEFAULT_PHOTO_MS}ms`, animationPlayState: paused || !active ? 'paused' : 'running' }} />
+                ))}
+            </i>
+          ))}
+        </div>
+      )}
+      {item.mediaType === 'video' ? (
+        <video
+          key={index}
+          ref={video}
+          src={item.mediaUrl}
+          loop={!many}
+          muted={muted}
+          playsInline
+          preload="metadata"
+          onLoadedMetadata={(e) => keepShape(ratioOf(e.currentTarget.videoWidth, e.currentTarget.videoHeight))}
+          onEnded={many ? next : undefined}
+          onTimeUpdate={many ? (e) => setVideoPct(e.currentTarget.currentTime / (e.currentTarget.duration || 1)) : undefined}
+          onClick={() => setPaused((p) => !p)}
+        />
+      ) : (
+        <img
+          key={index}
+          className="reel-photo"
+          src={item.mediaUrl}
+          alt={post.caption ? post.caption.slice(0, 120) : `Photo by ${post.author.fullName}`}
+          onLoad={(e) => keepShape(ratioOf(e.currentTarget.naturalWidth, e.currentTarget.naturalHeight))}
+          onClick={() => setPaused((p) => !p)}
+        />
+      )}
       <div className="reel-info">
         <Link to={`/u/${post.author.username}`} className="reel-author">
           <Avatar name={post.author.fullName} src={post.author.avatarUrl} size={36} />
           <strong>{post.author.username}</strong>
         </Link>
-        {post.caption && <p>{post.caption}</p>}
       </div>
       <div className="reel-actions">
         <button type="button" className={post.liked ? 'on' : ''} onClick={like} aria-pressed={post.liked} aria-label="Like">
@@ -99,6 +174,7 @@ function Reel({ post, muted, onMute, onChange }) {
 }
 
 export function Reels() {
+  useDoubleClickRefresh(); // double-click on a reel (outside its buttons) reloads the reels
   const [posts, setPosts] = useState([]);
   const [cursor, setCursor] = useState(null);
   const [state, setState] = useState('loading');

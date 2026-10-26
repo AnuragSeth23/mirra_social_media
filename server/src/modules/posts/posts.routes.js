@@ -59,6 +59,8 @@ mediaRouter.get('/:key', (req, res, next) => {
 const createSchema = z.object({
   caption: z.string().trim().max(2200, 'Keep it under 2,200 characters.').default(''),
   mediaKey: z.string().regex(KEY_RE).optional(),
+  // A reel can be several photos and videos: [{ key, durationMs }]. A photo's time is 1-30 s (5 s when not given).
+  items: z.array(z.object({ key: z.string().regex(KEY_RE), durationMs: z.number().int().min(1000, 'A photo must show for at least 1 second.').max(30_000, 'A photo can show for 30 seconds at most.').optional() })).max(10, 'A reel can have up to 10 photos and videos.').optional(),
   kind: z.enum(['post', 'reel']).default('post'),
   audience: z.enum(svc.AUDIENCES).optional(),
   tagUserIds: z.array(z.string().refine(isUuid, 'Invalid id.')).max(20, 'You can tag up to 20 people.').optional(),
@@ -111,7 +113,7 @@ postsRouter.post(
   '/',
   postLimiter,
   validateBody(createSchema),
-  wrap((req) => svc.createPost(me(req), req.body.caption, req.body.mediaKey, req.body.kind, req.body.audience, req.body.tagUserIds)),
+  wrap((req) => svc.createPost(me(req), req.body.caption, req.body.mediaKey, req.body.kind, req.body.audience, req.body.tagUserIds, req.body.items)),
 );
 postsRouter.get(
   '/tagged/:username',

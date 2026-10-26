@@ -30,7 +30,6 @@ export function Verify() {
   if (!state) return <Navigate to="/signup" replace />;
   const channel = state.pending[0] ?? 'email';
   const destination = channel === 'email' ? (state.email ?? 'your email') : (state.phone ?? 'your phone');
-  const stepIndex = channel === 'email' ? 1 : 2;
 
   async function submit(value = code) {
     if (value.length !== 6 || !state) return;
@@ -45,12 +44,12 @@ export function Verify() {
         navigate('/', { replace: true });
         return;
       }
+      // Not expected with the single-code sign-up; if the server still reports something pending, keep going on that channel.
       const next = { ...state, pending: res.pending };
       savePending(next);
       setState(next);
       setCode('');
       setCooldown(RESEND_SECONDS);
-      setNotice(`Email confirmed. Now enter the code we texted to ${state.phone ?? 'your phone'}.`);
     } catch (err) {
       setCode('');
       if (err instanceof ApiError && (err.code === 'ticket_expired' || err.code === 'invalid_token')) setExpired(true);
@@ -117,17 +116,19 @@ export function Verify() {
     >
       <ol className="steps" aria-label="Sign-up progress">
         <li className="done">Your details</li>
-        <li className={stepIndex === 1 ? 'current' : 'done'} aria-current={stepIndex === 1 ? 'step' : undefined}>
-          Email code
-        </li>
-        <li className={stepIndex === 2 ? 'current' : ''} aria-current={stepIndex === 2 ? 'step' : undefined}>
-          Phone code
+        <li className="current" aria-current="step">
+          Verify code
         </li>
       </ol>
       <h1>{channel === 'email' ? 'Check your email' : 'Check your phone'}</h1>
       <p className="lede">
         Enter the 6-digit code we sent to <strong className="dest">{destination}</strong>. It expires in 10 minutes.
       </p>
+      {state.username && (
+        <p className="fine">
+          Your sign-in ID is <strong>@{state.username}</strong>. You can also sign in with your email or mobile number.
+        </p>
+      )}
 
       <form
         className="stack"

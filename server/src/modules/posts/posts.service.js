@@ -47,26 +47,51 @@ function toDto(r, me) {
   };
 }
 
-/** Adds the (approved) tags to a list of post DTOs with one extra query. */
+/**
+ * Adds the (approved) tags and, for reels, the list of photos/videos (`items`, in order, with each photo's time) to a list of post DTOs,
+ * with one extra query each. `mediaUrl`/`mediaType` stay the FIRST item, so everything that shows a single picture keeps working.
+ */
 async function withTags(posts, me) {
   const map = await tagsFor(pool, posts.map((p) => p.id), me);
-  for (const p of posts) p.tags = map.get(p.id) ?? [];
+  const media = posts.length ? await q(pool, 'SELECT post_id, media_type, storage_key, duration_ms FROM post_media WHERE post_id IN (?) ORDER BY post_id, position', [posts.map((p) => toBin(p.id))]) : [];
+  for (const p of posts) {
+    p.tags = map.get(p.id) ?? [];
+    p.items = media.filter((m) => fromBin(m.post_id) === p.id).map((m) => ({ mediaUrl: mediaUrl(m.storage_key), mediaType: m.media_type, durationMs: m.duration_ms }));
+  }
   return posts;
 }
 
 export const AUDIENCES = ['public', 'friends', 'only_me'];
 
-export async function createPost(me, caption, mediaKey, kind = 'post', audience, tagUserIds = []) {
-  if (kind === 'reel' && !mediaKey) throw new AppError(422, 'reel_needs_video', 'A reel needs a video.');
-  if (!caption && !mediaKey) throw new AppError(422, 'empty_post', 'Add a photo or video, or write something.');
-  if (mediaKey) await requireMedia(mediaKey, kind === 'reel' ? 'video' : undefined);
+export const REEL_MAX_ITEMS = 10;
+export const IMAGE_SECONDS_DEFAULT = 5; // a photo in a reel plays this long unless the author chose another time
+const IMAGE_MS_MIN = 1000;
+const IMAGE_MS_MAX = 30_000;
+const clampMs = (v) => Math.min(IMAGE_MS_MAX, Math.max(IMAGE_MS_MIN, Math.round(Number(v) || IMAGE_SECONDS_DEFAULT * 1000)));
+
+/**
+ * A post has one photo or video; a reel has 1 to REEL_MAX_ITEMS photos and/or videos, played one after another.
+ * `items` is [{ key, durationMs? }]; the older single `mediaKey` still works. A photo's time (durationMs) is kept between 1 and 30 s.
+ */
+export async function createPost(me, caption, mediaKey, kind = 'post', audience, tagUserIds = [], items = []) {
+  const list = items.length ? items : mediaKey ? [{ key: mediaKey }] : [];
+  if (kind === 'reel' && !list.length) throw new AppError(422, 'reel_needs_media', 'A reel needs at least one photo or video.');
+  if (!caption && !list.length) throw new AppError(422, 'empty_post', 'Add a photo or video, or write something.');
+  if (list.length > 1 && kind !== 'reel') throw new AppError(422, 'too_many_media', 'Only a reel can have more than one photo or video.');
+  if (list.length > REEL_MAX_ITEMS) throw new AppError(422, 'too_many_media', `A reel can have up to ${REEL_MAX_ITEMS} photos and videos.`);
+  for (const it of list) await requireMedia(it.key);
   // No audience sent: use the author's own default (never a value the client invents for someone else).
   const chosen = audience ?? (await privacyOf(pool, me)).default_post_audience;
   const mentions = await checkMentions(pool, me, caption); // refuses people who do not accept mentions
   const id = uuidv7();
   await tx(async (c) => {
     await exec(c, 'INSERT INTO posts (id, author_id, kind, audience, caption) VALUES (?, ?, ?, ?, ?)', [toBin(id), toBin(me), kind, chosen, caption]);
-    if (mediaKey) await exec(c, 'INSERT INTO post_media (id, post_id, position, media_type, storage_key) VALUES (?, ?, 0, ?, ?)', [toBin(uuidv7()), toBin(id), mediaTypeOf(mediaKey), mediaKey]);
+    for (const [position, it] of list.entries()) {
+      const type = mediaTypeOf(it.key);
+      // Only photos in a reel have a set time; a video plays for its own length.
+      const duration = type === 'image' && kind === 'reel' ? clampMs(it.durationMs ?? IMAGE_SECONDS_DEFAULT * 1000) : null;
+      await exec(c, 'INSERT INTO post_media (id, post_id, position, media_type, storage_key, duration_ms) VALUES (?, ?, ?, ?, ?, ?)', [toBin(uuidv7()), toBin(id), position, type, it.key, duration]);
+    }
     await exec(c, 'UPDATE users SET posts_count = posts_count + 1 WHERE id = ?', [toBin(me)]);
     await syncTags(c, id, caption);
     await syncMentions(c, id, me, mentions, chosen);
@@ -80,6 +105,28 @@ export async function getPost(me, id) {
   if (!rows[0]) throw new AppError(404, 'not_found', 'This post is not available.');
   const [dto] = await withTags([toDto(rows[0], me)], me);
   return dto;
+}
+
+/**
+ * Small cards for posts and reels shared inside a chat, built for the person who is looking: a post they are not allowed to
+ * see (private account, friends-only, blocked, deleted) is left out of the map and the chat shows "no longer available".
+ */
+export async function postPreviews(me, ids) {
+  if (!ids.length) return new Map();
+  const rows = await q(pool, `${SELECT} WHERE p.id IN (?) AND ${VISIBLE}`, [...sel(me), ids.map(toBin), ...vis(me)]);
+  return new Map(
+    rows.map((r) => [
+      fromBin(r.id),
+      {
+        id: fromBin(r.id),
+        kind: r.kind,
+        caption: (r.caption ?? '').slice(0, 140),
+        mediaUrl: mediaUrl(r.storage_key),
+        mediaType: r.media_type ?? null,
+        author: { username: r.username, fullName: r.full_name, avatarUrl: mediaUrl(r.avatar_key) },
+      },
+    ]),
+  );
 }
 
 /**

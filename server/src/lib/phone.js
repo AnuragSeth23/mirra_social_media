@@ -7,6 +7,23 @@ export function normalizePhone(input) {
 }
 
 /**
+ * A phone number as someone types it when signing in or recovering an account: with a country code ("+91 98383 87338"),
+ * or a bare 10-digit Indian mobile ("9838387338", +91 assumed). Returns E.164 or null.
+ */
+export function phoneFromTyped(text) {
+  const t = text.trim();
+  if (t.startsWith('+')) return normalizePhone(t);
+  const digits = t.replace(/\D/g, '');
+  return digits.length === 10 && /^[6-9]/.test(digits) && /^[\d\s().-]+$/.test(t) ? normalizePhone(`+91${digits}`) : null;
+}
+
+/** a***@gmail.com — enough to recognise your own address, not enough to guess someone else's. */
+export function maskEmail(email) {
+  const [name = '', domain = ''] = email.split('@');
+  return `${name.slice(0, 1)}${'•'.repeat(Math.max(Math.min(name.length - 1, 5), 1))}@${domain}`;
+}
+
+/**
  * The rules for a sign-up mobile number, beyond "is a real number": at most 10 digits after the country code,
  * and for India (+91) exactly 10 digits starting with 6, 7, 8 or 9 (the phone library also allows landlines).
  * Returns a message to show, or null when the number is fine.

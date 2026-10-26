@@ -4,14 +4,25 @@ import { AuthShell } from '../components/AuthShell';
 import { Button, Field, FormAlert, PasswordField } from '../components/ui';
 import { api, ApiError } from '../lib/api';
 import { savePending } from '../lib/pending';
+import { saveSignInId } from '../lib/signinId';
 import { COUNTRIES, DEFAULT_COUNTRY, rules } from '../lib/validation';
 
 const FIELD_ORDER = ['fullName', 'username', 'email', 'phone', 'dateOfBirth', 'password'];
 
-function validate(f, country) {
+function validate(f, country, verifyVia) {
   const out = {};
   for (const k of FIELD_ORDER) {
-    const msg = k === 'password' ? rules.password(f.password, f.username.trim()) : k === 'phone' ? rules.phone(f.phone, country) : rules[k](f[k]);
+    // The email is optional: it is needed only when the sign-up code is to be sent there. If given, it must look like an email.
+    const msg =
+      k === 'password'
+        ? rules.password(f.password, f.username.trim())
+        : k === 'phone'
+          ? rules.phone(f.phone, country)
+          : k === 'email' && !f.email.trim()
+            ? verifyVia === 'email'
+              ? 'Enter your email to get the code there.'
+              : ''
+            : rules[k](f[k]);
     if (msg) out[k] = msg;
   }
   return out;
@@ -33,6 +44,7 @@ export function SignUp() {
   const navigate = useNavigate();
   const [form, setForm] = useState({ fullName: '', username: '', email: '', phone: '', dateOfBirth: '', password: '' });
   const [country, setCountry] = useState(DEFAULT_COUNTRY); // India (+91) is selected when the page opens
+  const [verifyVia, setVerifyVia] = useState('phone'); // where the single sign-up code is sent
   const [touched, setTouched] = useState({});
   const [serverErrors, setServerErrors] = useState({});
   const [formError, setFormError] = useState('');
@@ -40,7 +52,7 @@ export function SignUp() {
   const [usernameState, setUsernameState] = useState('idle');
   const formRef = useRef(null);
 
-  const clientErrors = validate(form, country);
+  const clientErrors = validate(form, country, verifyVia);
   const errorFor = (k) => serverErrors[k] || (touched[k] ? clientErrors[k] : undefined);
 
   const set = (k) => (e) => {
@@ -95,9 +107,10 @@ export function SignUp() {
 
     setBusy(true);
     try {
-      const body = { ...form, username: form.username.trim().toLowerCase(), email: form.email.trim(), phone: e164() };
+      const body = { ...form, username: form.username.trim().toLowerCase(), email: form.email.trim() || undefined, phone: e164(), verifyVia };
       const res = await api('/auth/signup', { method: 'POST', body, auth: false });
-      savePending({ ...res, email: body.email, phone: `+${dial} ${form.phone.trim()}` });
+      savePending({ ...res, email: body.email, phone: `+${dial} ${form.phone.trim()}`, username: body.username });
+      saveSignInId(body.username);
       navigate('/verify');
     } catch (err) {
       if (err instanceof ApiError && (err.status === 409 || err.status === 422) && Object.keys(err.fields).length) {
@@ -112,7 +125,7 @@ export function SignUp() {
     }
   }
 
-  const usernameHint = usernameState === 'checking' ? 'Checking…' : usernameState === 'available' ? <span className="ok">Available</span> : 'Letters, numbers, periods and underscores.';
+  const usernameHint = usernameState === 'checking' ? 'Checking…' : usernameState === 'available' ? <span className="ok">Available</span> : 'Your unique ID, 3–30 characters: small letters, numbers, "." or "_". No spaces and no @. Example: anurag_seth';
 
   const maxDob = new Date().toISOString().slice(0, 10);
 
@@ -129,11 +142,10 @@ export function SignUp() {
         <li className="current" aria-current="step">
           Your details
         </li>
-        <li>Email code</li>
-        <li>Phone code</li>
+        <li>Verify code</li>
       </ol>
       <h1>Create your account</h1>
-      <p className="lede">We’ll send a code to your email and your phone to confirm they’re yours.</p>
+      <p className="lede">We’ll send one code to the email or phone you choose, to confirm it’s yours.</p>
 
       <form ref={formRef} onSubmit={submit} noValidate className="stack">
         {formError && <FormAlert>{formError}</FormAlert>}
@@ -142,17 +154,28 @@ export function SignUp() {
           label="Username"
           name="username"
           value={form.username}
-          onChange={set('username')}
+          onChange={(e) => set('username')({ target: { value: e.target.value.replace(/[@\s]/g, '').toLowerCase() } })} // an @, spaces or capitals are dropped as you type
           onBlur={blur('username')}
           error={errorFor('username')}
           hint={usernameHint}
-          prefix="@"
-          autoComplete="username"
+          placeholder="e.g. anurag_seth"
+          autoComplete="off"
           autoCapitalize="none"
           spellCheck={false}
           maxLength={30}
         />
-        <Field label="Email" name="email" type="email" value={form.email} onChange={set('email')} onBlur={blur('email')} error={errorFor('email')} autoComplete="email" autoCapitalize="none" />
+        <Field
+          label="Email"
+          name="email"
+          type="email"
+          value={form.email}
+          onChange={set('email')}
+          onBlur={blur('email')}
+          error={errorFor('email')}
+          hint={verifyVia === 'email' ? 'Needed to receive your code by email.' : 'Optional. Add it to sign in or recover your account by email too.'}
+          autoComplete="email"
+          autoCapitalize="none"
+        />
         <div className="field-row">
           <div className="field country">
             <label htmlFor="country">Country</label>
@@ -200,6 +223,21 @@ export function SignUp() {
           hint="At least 8 characters, with a letter and a number."
           autoComplete="new-password"
         />
+        <fieldset className="choice-group">
+          <legend>Send my verification code to</legend>
+          {[
+            ['phone', 'Phone (text message)', form.phone ? `+${dial} ${form.phone}` : 'the number you enter above'],
+            ['email', 'Email address', form.email.trim() || 'enter your email above to use this'],
+          ].map(([value, label, where]) => (
+            <label key={value} className={`choice ${verifyVia === value ? 'on' : ''}`}>
+              <input type="radio" name="verifyVia" value={value} checked={verifyVia === value} onChange={() => setVerifyVia(value)} />
+              <span>
+                <strong>{label}</strong>
+                <small>{where}</small>
+              </span>
+            </label>
+          ))}
+        </fieldset>
         <Button type="submit" busy={busy}>
           {busy ? 'Creating account' : 'Create account'}
         </Button>

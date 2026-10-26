@@ -4,6 +4,7 @@
  */
 import mysql from 'mysql2/promise';
 import { config } from '../src/config/env.js';
+import { emailIndex } from '../src/lib/crypto.js';
 
 const API = process.env.API_URL ?? 'http://localhost:4000/api/v1';
 let cookie = '';
@@ -41,8 +42,8 @@ const latestCode = async (channel, who) =>
   (
     await db.query(
       `SELECT vc.dev_code FROM verification_codes vc JOIN users u ON u.id = vc.user_id
-      WHERE (u.email = ? OR u.username = ?) AND vc.channel = ? ORDER BY vc.id DESC LIMIT 1`,
-      [who, who, channel],
+      WHERE (u.email_hash = ? OR u.username = ?) AND vc.channel = ? ORDER BY vc.id DESC LIMIT 1`,
+      [emailIndex(who), who, channel],
     )
   )[0][0].dev_code;
 
@@ -61,11 +62,11 @@ const bad = await call('POST', '/auth/signup', { ...user, email: 'nope', passwor
 expect('rejects invalid sign-up with field errors', bad.status === 422 && bad.json.error.details.length >= 3, bad.json);
 
 const signup = await call('POST', '/auth/signup', user);
-expect('sign-up returns a verification ticket', signup.status === 201 && !!signup.json.data.ticket, signup.json);
+expect('sign-up returns a verification ticket and asks for ONE code (phone is the default)', signup.status === 201 && !!signup.json.data.ticket && JSON.stringify(signup.json.data.pending) === '["phone"]', signup.json);
 const ticket = signup.json.data.ticket;
 
 const dup = await call('POST', '/auth/signup', { ...user, username: `other.${n}` });
-expect('duplicate email and phone are rejected', dup.status === 409 && dup.json.error.details.length === 2, dup.json);
+expect('a duplicate email is rejected (a mobile number may be shared, so only the email is)', dup.status === 409 && dup.json.error.details.length === 1 && dup.json.error.details[0].field === 'email', dup.json);
 
 const avail = await call('GET', `/auth/availability?username=${user.username}`);
 expect('username availability reports taken', avail.json.data.username === false);
@@ -73,18 +74,18 @@ expect('username availability reports taken', avail.json.data.username === false
 const early = await call('POST', '/auth/login', { identifier: user.username, password: user.password });
 expect('sign-in before verification asks to verify', early.status === 403 && early.json.error.code === 'verification_required', early.json);
 
-const wrong = await call('POST', '/auth/verify', { ticket, channel: 'email', code: '000000' });
+const wrong = await call('POST', '/auth/verify', { ticket, channel: 'phone', code: '000000' });
 expect('wrong code is rejected and counted', wrong.status === 400 && wrong.json.error.details.attemptsLeft === 4, wrong.json);
 
-const resend = await call('POST', '/auth/resend', { ticket, channel: 'email' });
+const resend = await call('POST', '/auth/resend', { ticket, channel: 'phone' });
 expect('resend is throttled by cooldown', resend.status === 429, resend.json);
 
-await sleep(300);
-const v1 = await call('POST', '/auth/verify', { ticket, channel: 'email', code: await latestCode('email', user.email) });
-expect('email verifies, phone still pending', v1.status === 200 && v1.json.data.status === 'pending', v1.json);
+const otherChannel = await call('POST', '/auth/verify', { ticket, channel: 'email', code: '000000' });
+expect('the channel that was not chosen has no code to verify (409)', otherChannel.status === 409, otherChannel.json);
 
+await sleep(300);
 const v2 = await call('POST', '/auth/verify', { ticket, channel: 'phone', code: await latestCode('phone', user.username) });
-expect('phone verifies and account activates with a session', v2.status === 200 && !!v2.json.data.accessToken, v2.json);
+expect('the single phone code verifies and the account activates with a session', v2.status === 200 && !!v2.json.data.accessToken, v2.json);
 expect('refresh cookie is httpOnly and strict', !!cookie);
 
 const me = await call('GET', '/users/me', undefined, v2.json.data.accessToken);

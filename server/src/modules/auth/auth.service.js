@@ -1,11 +1,11 @@
 import { config } from '../../config/env.js';
 import { exec, pool, q, tx } from '../../db/pool.js';
-import { blindIndex, decryptField, encryptField, CURRENT_KEY_VERSION, hashOtp, randomOtp, randomToken, safeEqual, sha256 } from '../../lib/crypto.js';
+import { blindIndex, decryptField, emailAad, emailIndex, encryptField, CURRENT_KEY_VERSION, hashOtp, randomOtp, randomToken, safeEqual, sha256 } from '../../lib/crypto.js';
 import { AppError, conflict, forbidden, tooMany, unauthorized } from '../../lib/errors.js';
 import { fromBin, isUuid, toBin, uuidv7 } from '../../lib/ids.js';
 import { deliverCode } from '../../lib/otp-delivery.js';
 import { burnPasswordCheck, hashPassword, verifyPassword } from '../../lib/password.js';
-import { mobileProblem, normalizePhone } from '../../lib/phone.js';
+import { mobileProblem, normalizePhone, phoneFromTyped } from '../../lib/phone.js';
 import { signAccessToken, signTwoFactorTicket, signVerificationTicket, verifyTicket, verifyTwoFactorTicket } from '../../lib/tokens.js';
 import { attemptsLeft, checkSecondFactor } from '../account/twofactor.service.js';
 import { getProfile } from '../users/users.service.js';
@@ -22,12 +22,21 @@ const phoneAad = (userId) => `users.phone:${userId}`;
 
 const codeScope = (userId, channel, purpose = 'signup') => `${userId}:${channel}:${purpose}`;
 
-const USER_COLUMNS = `id, username, email, status, password_hash, phone_ciphertext, phone_key_version,
-  email_verified_at, phone_verified_at, deleted_at, totp_enabled_at`;
+const USER_COLUMNS = `id, username, email_ciphertext, email_key_version, status, password_hash, phone_ciphertext, phone_key_version,
+  email_verified_at, phone_verified_at, deleted_at, totp_enabled_at, signup_channel`;
 
-const pendingChannels = (u) => [...(u.email_verified_at ? [] : ['email']), ...(u.phone_verified_at ? [] : ['phone'])];
+const MAX_ACCOUNTS_PER_PHONE = 5;
 
-const destinationFor = (u, channel) => (channel === 'email' ? u.email : decryptField(u.phone_ciphertext, phoneAad(fromBin(u.id)), u.phone_key_version));
+/** Sign-up needs ONE code, on the channel the person chose. Only an account still waiting for that code has anything pending. */
+const pendingChannels = (u) => {
+  if (u.status !== 'pending_verification') return [];
+  return (u.signup_channel === 'email' ? u.email_verified_at : u.phone_verified_at) ? [] : [u.signup_channel];
+};
+
+// The email is optional: an account that signed up with only a phone has none (null).
+const emailOf = (u) => (u.email_ciphertext ? decryptField(u.email_ciphertext, emailAad(fromBin(u.id)), u.email_key_version) : null);
+
+const destinationFor = (u, channel) => (channel === 'email' ? emailOf(u) : decryptField(u.phone_ciphertext, phoneAad(fromBin(u.id)), u.phone_key_version));
 
 async function logActivity(db, userId, action, metadata = {}) {
   await exec(db, 'INSERT INTO activity_log (user_id, action, metadata) VALUES (?, ?, ?)', [userId ? toBin(userId) : null, action, JSON.stringify(metadata)]);
@@ -162,31 +171,35 @@ export async function signup(input, meta) {
   const problem = mobileProblem(phone);
   if (problem) throw new AppError(422, 'validation_error', 'Check the highlighted fields.', [{ field: 'phone', message: problem }]);
   const phoneHash = blindIndex(phone);
+  const emailHash = input.email ? emailIndex(input.email) : null;
   const passwordHash = await hashPassword(input.password);
   const userId = uuidv7();
 
-  const codes = await tx(async (c) => {
+  const code = await tx(async (c) => {
     // Free up details held by sign-ups that were never verified.
     await exec(
       c,
       `DELETE FROM users WHERE status = 'pending_verification' AND created_at < NOW(3) - INTERVAL 24 HOUR
-          AND (username = ? OR email = ? OR phone_hash = ?)`,
-      [input.username, input.email, phoneHash],
+          AND (username = ? OR email_hash = ?)`,
+      [input.username, emailHash],
     );
 
-    const rows = await q(c, 'SELECT username, email, phone_hash FROM users WHERE username = ? OR email = ? OR phone_hash = ?', [input.username, input.email, phoneHash]);
+    // Username and email are one-per-account. A mobile number may be shared by a few accounts (up to MAX_ACCOUNTS_PER_PHONE).
+    const rows = await q(c, 'SELECT username, email_hash FROM users WHERE username = ? OR email_hash = ?', [input.username, emailHash]);
     const taken = [];
     if (rows.some((r) => r.username.toLowerCase() === input.username)) taken.push({ field: 'username', message: 'That username is taken.' });
-    if (rows.some((r) => r.email.toLowerCase() === input.email)) taken.push({ field: 'email', message: 'An account already uses this email.' });
-    if (rows.some((r) => safeEqual(r.phone_hash, phoneHash))) taken.push({ field: 'phone', message: 'An account already uses this phone number.' });
+    if (emailHash && rows.some((r) => r.email_hash && safeEqual(r.email_hash, emailHash))) taken.push({ field: 'email', message: 'An account already uses this email.' });
+    const [{ n: onPhone }] = await q(c, 'SELECT COUNT(*) AS n FROM users WHERE phone_hash = ? AND deleted_at IS NULL', [phoneHash]);
+    if (Number(onPhone) >= MAX_ACCOUNTS_PER_PHONE) taken.push({ field: 'phone', message: `This number already has the maximum of ${MAX_ACCOUNTS_PER_PHONE} accounts.` });
     if (taken.length) throw conflict('account_exists', 'Some of these details are already in use.', taken);
 
     try {
       await exec(
         c,
-        `INSERT INTO users (id, username, full_name, email, phone_ciphertext, phone_hash, phone_key_version, password_hash, date_of_birth)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [toBin(userId), input.username, input.fullName, input.email, encryptField(phone, phoneAad(userId)), phoneHash, CURRENT_KEY_VERSION, passwordHash, input.dateOfBirth],
+        `INSERT INTO users (id, username, full_name, email_ciphertext, email_hash, email_key_version, phone_ciphertext, phone_hash, phone_key_version, password_hash, date_of_birth, signup_channel)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [toBin(userId), input.username, input.fullName, input.email ? encryptField(input.email, emailAad(userId)) : null, emailHash, CURRENT_KEY_VERSION,
+          encryptField(phone, phoneAad(userId)), phoneHash, CURRENT_KEY_VERSION, passwordHash, input.dateOfBirth, input.verifyVia],
       );
     } catch (err) {
       const field = duplicateToField(err); // lost a race with a concurrent sign-up
@@ -195,21 +208,21 @@ export async function signup(input, meta) {
     }
     await exec(c, 'INSERT INTO user_settings (user_id) VALUES (?)', [toBin(userId)]);
     await logActivity(c, userId, 'signup', { ip: meta.ip });
-    return { email: await createCode(c, userId, 'email'), phone: await createCode(c, userId, 'phone') };
+    return createCode(c, userId, input.verifyVia); // one code, on the channel the person chose
   });
 
-  await deliverCode({ channel: 'email', to: input.email, code: codes.email });
-  await deliverCode({ channel: 'phone', to: phone, code: codes.phone });
-  // Development only: show the codes on screen too, so testers never have to hunt for a console window.
-  const dev = DEV_VISIBLE_CODES ? { email: codes.email, phone: codes.phone } : undefined;
-  return { ticket: signVerificationTicket(userId), pending: ['email', 'phone'], ...(dev ? { dev } : {}) };
+  const via = input.verifyVia;
+  await deliverCode({ channel: via, to: via === 'email' ? input.email : phone, code });
+  // Development only: show the code on screen too, so testers never have to hunt for a console window.
+  const dev = DEV_VISIBLE_CODES ? { [via]: code } : undefined;
+  return { ticket: signVerificationTicket(userId), pending: [via], ...(dev ? { dev } : {}) };
 }
 
 export async function checkAvailability(username, email) {
   const result = {};
   const notStale = `NOT (status = 'pending_verification' AND created_at < NOW(3) - INTERVAL 24 HOUR)`;
   if (username) result.username = (await q(pool, `SELECT 1 FROM users WHERE username = ? AND ${notStale}`, [username])).length === 0;
-  if (email) result.email = (await q(pool, `SELECT 1 FROM users WHERE email = ? AND ${notStale}`, [email])).length === 0;
+  if (email) result.email = (await q(pool, `SELECT 1 FROM users WHERE email_hash = ? AND ${notStale}`, [emailIndex(email)])).length === 0;
   return result;
 }
 
@@ -269,14 +282,11 @@ export async function verifyCode(ticket, channel, code, meta) {
     }
 
     await exec(c, 'UPDATE verification_codes SET consumed_at = NOW(3) WHERE id = ?', [row.id]);
-    const emailDone = !!user.email_verified_at || channel === 'email';
-    const phoneDone = !!user.phone_verified_at || channel === 'phone';
-    const activate = emailDone && phoneDone && user.status === 'pending_verification';
+    // The one code a sign-up needs has been proven: the contact is verified and the account goes live.
     const column = channel === 'email' ? 'email_verified_at' : 'phone_verified_at';
-    await exec(c, `UPDATE users SET ${column} = NOW(3)${activate ? ", status = 'active'" : ''} WHERE id = ?`, [uid]);
+    await exec(c, `UPDATE users SET ${column} = NOW(3), status = 'active' WHERE id = ?`, [uid]);
     await logActivity(c, userId, `verified_${channel}`);
-    const pending = [...(emailDone ? [] : ['email']), ...(phoneDone ? [] : ['phone'])];
-    return { ok: true, pending, activated: activate || user.status === 'active' };
+    return { ok: true, pending: [], activated: true };
   });
 
   if (!outcome.ok) throw outcome.error;
@@ -289,38 +299,49 @@ export async function verifyCode(ticket, channel, code, meta) {
 
 const BAD_CREDENTIALS = () => unauthorized('invalid_credentials', "Those details don't match an account. Check them and try again.");
 
-async function findByIdentifier(identifier) {
-  if (identifier.includes('@')) {
-    return (await q(pool, `SELECT ${USER_COLUMNS} FROM users WHERE email = ?`, [identifier.toLowerCase()]))[0];
+/** Every account a sign-in identifier points to: one for a username or email, a few for a mobile number shared between accounts. */
+async function findCandidates(identifier) {
+  if (identifier.includes('@')) return q(pool, `SELECT ${USER_COLUMNS} FROM users WHERE email_hash = ?`, [emailIndex(identifier)]);
+  const phone = phoneFromTyped(identifier);
+  if (phone) {
+    const rows = await q(pool, `SELECT ${USER_COLUMNS} FROM users WHERE phone_hash = ? AND deleted_at IS NULL ORDER BY created_at LIMIT ${MAX_ACCOUNTS_PER_PHONE}`, [blindIndex(phone)]);
+    if (rows.length || identifier.trim().startsWith('+')) return rows;
+    // a bare 10-digit number that is nobody's phone may still be somebody's all-digit username
   }
-  if (/^\+[\d\s().-]{6,}$/.test(identifier)) {
-    const phone = normalizePhone(identifier);
-    if (!phone) return undefined;
-    return (await q(pool, `SELECT ${USER_COLUMNS} FROM users WHERE phone_hash = ?`, [blindIndex(phone)]))[0];
-  }
-  return (await q(pool, `SELECT ${USER_COLUMNS} FROM users WHERE username = ?`, [identifier.toLowerCase()]))[0];
+  return q(pool, `SELECT ${USER_COLUMNS} FROM users WHERE username = ?`, [identifier.toLowerCase()]);
 }
 
 export async function login(identifier, password, meta) {
-  const user = await findByIdentifier(identifier);
-  if (!user || user.deleted_at) {
+  const candidates = (await findCandidates(identifier)).filter((u) => !u.deleted_at);
+  if (!candidates.length) {
     await burnPasswordCheck(password);
     throw BAD_CREDENTIALS();
   }
-  const userId = fromBin(user.id);
 
-  const [{ n }] = await q(
-    pool,
-    `SELECT COUNT(*) AS n FROM activity_log
-      WHERE user_id = ? AND action = 'login_failed' AND created_at > NOW(3) - INTERVAL 15 MINUTE`,
-    [user.id],
-  );
-  if (Number(n) >= MAX_FAILED_LOGINS) throw tooMany('Too many failed attempts on this account. Try again in 15 minutes.', 900);
-
-  if (!(await verifyPassword(user.password_hash, password))) {
-    await logActivity(pool, userId, 'login_failed', { ip: meta.ip });
+  // A mobile number can be shared by a few accounts: the password says which one is meant.
+  const matches = [];
+  let locked = 0;
+  for (const u of candidates) {
+    const [{ n }] = await q(
+      pool,
+      `SELECT COUNT(*) AS n FROM activity_log
+        WHERE user_id = ? AND action = 'login_failed' AND created_at > NOW(3) - INTERVAL 15 MINUTE`,
+      [u.id],
+    );
+    if (Number(n) >= MAX_FAILED_LOGINS) {
+      locked++;
+      continue;
+    }
+    if (await verifyPassword(u.password_hash, password)) matches.push(u);
+    else await logActivity(pool, fromBin(u.id), 'login_failed', { ip: meta.ip });
+  }
+  if (!matches.length) {
+    if (locked === candidates.length) throw tooMany('Too many failed attempts on this account. Try again in 15 minutes.', 900);
     throw BAD_CREDENTIALS();
   }
+  if (matches.length > 1) throw conflict('multiple_accounts', 'More than one account with this number uses that password. Sign in with your username instead.');
+  const user = matches[0];
+  const userId = fromBin(user.id);
 
   if (user.status === 'suspended') throw forbidden('account_suspended', 'This account is suspended. Contact support for help.');
 
@@ -360,86 +381,13 @@ export async function loginWithSecondFactor(ticket, code, meta) {
   return startSession(userId, meta);
 }
 
-// ---------------------------------------------------------------- forgot password
-
-/**
- * Sends a reset code to the account's email. The answer is always the same, so this can't be used
- * to find out which usernames, emails or phone numbers have accounts.
- */
-export async function forgotPassword(identifier) {
-  // `dev` is filled only in development (console delivery). In production the answer is identical for every identifier.
-  let dev = { note: 'No account matches that username, email or phone, so no code was created.' };
-  const user = await findByIdentifier(identifier);
-  if (user && !user.deleted_at && user.status !== 'pending_verification' && user.status !== 'suspended') {
-    const userId = fromBin(user.id);
-    if ((await sendWaitSeconds(pool, userId, 'email', 'password_reset')) === 0) {
-      const code = await createCode(pool, userId, 'email', 'password_reset');
-      await deliverCode({ channel: 'email', to: user.email, code });
-      await logActivity(pool, userId, 'password_reset_requested');
-      dev = { code };
-    } else {
-      const [last] = await q(
-        pool,
-        `SELECT dev_code FROM verification_codes WHERE user_id = ? AND channel = 'email' AND purpose = 'password_reset'
-            AND consumed_at IS NULL AND expires_at > NOW(3) ORDER BY id DESC LIMIT 1`,
-        [user.id],
-      );
-      dev = { code: last?.dev_code ?? undefined, note: 'A code was sent a moment ago. Use that one (a new one can be requested after a minute).' };
-    }
-  } else if (user) {
-    dev = { note: 'This account cannot reset its password right now.' };
-  }
-  return { sent: true, ...(DEV_VISIBLE_CODES ? { dev } : {}) };
-}
-
-const BAD_RESET_CODE = () => new AppError(400, 'invalid_code', "That code isn't right or has expired. Check it, or ask for a new one.");
-
-/** Checks the emailed code, sets the new password, and signs the account out everywhere. */
-export async function resetPassword(identifier, code, newPassword) {
-  const found = await findByIdentifier(identifier);
-  if (!found || found.deleted_at || found.status === 'pending_verification' || found.status === 'suspended') {
-    await burnPasswordCheck(newPassword);
-    throw BAD_RESET_CODE();
-  }
-  const userId = fromBin(found.id);
-  const username = (await q(pool, 'SELECT username FROM users WHERE id = ?', [found.id]))[0].username;
-  const passwordHash = await hashPassword(newPassword);
-
-  // Failures are returned (not thrown) so the attempt counter update still commits.
-  const failure = await tx(async (c) => {
-    const row = (
-      await q(
-        c,
-        `SELECT id, code_hash, attempts, max_attempts, expires_at < NOW(3) AS expired FROM verification_codes
-        WHERE user_id = ? AND channel = 'email' AND purpose = 'password_reset' AND consumed_at IS NULL
-        ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
-        [found.id],
-      )
-    )[0];
-    if (!row || row.expired) return BAD_RESET_CODE();
-    if (row.attempts >= row.max_attempts) return new AppError(429, 'too_many_attempts', 'Too many incorrect tries. Ask for a new code.');
-    if (!safeEqual(row.code_hash, hashOtp(code, codeScope(userId, 'email', 'password_reset')))) {
-      await exec(c, 'UPDATE verification_codes SET attempts = attempts + 1 WHERE id = ?', [row.id]);
-      return new AppError(400, 'invalid_code', "That code isn't right. Check it and try again.", { attemptsLeft: Math.max(row.max_attempts - row.attempts - 1, 0) });
-    }
-    // Only someone holding the right code learns the password rules about this account.
-    if (newPassword.toLowerCase().includes(username)) {
-      return new AppError(422, 'validation_error', 'Check the highlighted fields.', [{ field: 'password', message: "Your password can't contain your username." }]);
-    }
-    await exec(c, 'UPDATE verification_codes SET consumed_at = NOW(3) WHERE id = ?', [row.id]);
-    await exec(c, 'UPDATE users SET password_hash = ?, password_changed_at = NOW(3) WHERE id = ?', [passwordHash, found.id]);
-    await exec(c, 'UPDATE sessions SET revoked_at = NOW(3) WHERE user_id = ? AND revoked_at IS NULL', [found.id]);
-    await logActivity(c, userId, 'password_reset');
-    return null;
-  });
-  if (failure) throw failure;
-  return { reset: true };
-}
+// Forgot password / forgot username live in recovery.service.js (one flow: prove an email or phone with a code, then list or reset the accounts that use it).
 
 /** Housekeeping: drop abandoned sign-ups, old codes and long-expired sessions. Runs hourly from index.js. */
 export async function purgeStale() {
   await exec(pool, `DELETE FROM users WHERE status = 'pending_verification' AND created_at < NOW(3) - INTERVAL 24 HOUR`);
   await exec(pool, `DELETE FROM verification_codes WHERE created_at < NOW(3) - INTERVAL 1 DAY`);
+  await exec(pool, `DELETE FROM recovery_requests WHERE created_at < NOW(3) - INTERVAL 1 DAY`);
   await exec(pool, `DELETE FROM sessions WHERE expires_at < NOW(3) - INTERVAL 7 DAY`);
 }
 

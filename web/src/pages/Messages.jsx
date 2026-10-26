@@ -9,19 +9,26 @@ import { timeAgo } from '../lib/time';
 export function Messages() {
   const navigate = useNavigate();
   const [chats, setChats] = useState(null);
+  const [folder, setFolder] = useState('inbox'); // 'inbox' = chats, 'requests' = first messages from people who are not your friends
+  const [requestCount, setRequestCount] = useState(0);
   const [text, setText] = useState('');
   const [found, setFound] = useState([]);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    const load = () =>
-      api('/messages')
+    setChats(null);
+    const load = () => {
+      api(folder === 'requests' ? '/messages?folder=requests' : '/messages')
         .then(setChats)
         .catch(() => setChats((c) => c ?? []));
-    void load();
+      api('/messages/unread-count')
+        .then((n) => setRequestCount(n.requests))
+        .catch(() => {});
+    };
+    load();
     const t = setInterval(load, 8000);
     return () => clearInterval(t);
-  }, []);
+  }, [folder]);
 
   useEffect(() => {
     const t = text.trim();
@@ -87,15 +94,29 @@ export function Messages() {
           </section>
         ) : (
           <>
+            <div className="seg" role="tablist" aria-label="Message folders">
+              <button type="button" role="tab" aria-selected={folder === 'inbox'} className={folder === 'inbox' ? 'on' : ''} onClick={() => setFolder('inbox')}>
+                Chats
+              </button>
+              <button type="button" role="tab" aria-selected={folder === 'requests'} className={folder === 'requests' ? 'on' : ''} onClick={() => setFolder('requests')}>
+                Requests{requestCount > 0 ? ` (${requestCount})` : ''}
+              </button>
+            </div>
             {chats === null && (
               <p className="fine center" role="status">
                 Loading…
               </p>
             )}
-            {chats?.length === 0 && (
+            {chats?.length === 0 && folder === 'inbox' && (
               <div className="empty">
                 <h2>No messages yet</h2>
                 <p>Search for someone above, or tap “Message” on their profile.</p>
+              </div>
+            )}
+            {chats?.length === 0 && folder === 'requests' && (
+              <div className="empty">
+                <h2>No message requests</h2>
+                <p>When someone who is not your friend writes to you first, their message waits here until you accept it.</p>
               </div>
             )}
             <ul className="chats">

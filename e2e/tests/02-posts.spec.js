@@ -136,7 +136,7 @@ test.describe('Posts, likes, comments, replies, saves, hashtags', () => {
     await ctx.close();
   });
 
-  test('share: send a post to a friend inside SocialAmbak and it shows up as a clickable link in the chat', async ({ browser }) => {
+  test('share: send a post to a friend inside SocialAmbak and it shows up as a post card in the chat', async ({ browser }) => {
     const sender = await createUser('ss');
     const friend = await createUser('sf', 'Friendly Person');
     const p = await api('POST', '/posts', sender.token, { caption: 'look at this' });
@@ -149,10 +149,12 @@ test.describe('Posts, likes, comments, replies, saves, hashtags', () => {
     await expect(row.getByRole('button', { name: /Sent/ })).toBeVisible();
     const { page: fp, ctx: fc } = await signedInContext(browser, friend);
     await fp.goto('/messages');
+    await fp.getByRole('tab', { name: /Requests/ }).click(); // not friends: it waits in Requests until accepted
     await fp.getByRole('link', { name: new RegExp(sender.fullName) }).click();
-    const link = fp.locator('.bubble a.msg-link');
-    await expect(link).toBeVisible();
-    await link.click();
+    const card = fp.locator('.share-card');
+    await expect(card).toContainText(`@${sender.username}`);
+    await expect(fp.locator('.bubble a.msg-link')).toHaveCount(0); // a card, not a pasted link
+    await card.click();
     await expect(fp).toHaveURL(new RegExp(`/post/${p.json.data.id}`));
     await ctx.close();
     await fc.close();
