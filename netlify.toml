@@ -1,6 +1,6 @@
 # Netlify hosts only the React site. /api is forwarded to the Node API on Render so the browser sees ONE origin
 # (the sign-in cookie is SameSite=Strict and would not work across two sites).
-# Replace YOUR-API.onrender.com with the address Render gives your API service.
+# Replace socialambak-api.onrender.com with the address Render gives your API service.
 [build]
   base = "web"
   command = "npm install && npm run build"
@@ -11,7 +11,7 @@
 
 [[redirects]]
   from = "/api/*"
-  to = "https://YOUR-API.onrender.com/api/:splat"
+  to = "https://socialambak-api.onrender.com/api/:splat"
   status = 200
   force = true
 
