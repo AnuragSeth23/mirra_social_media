@@ -20,6 +20,7 @@ export const uploadLimiter = perUser(HOUR, 120, 'You have uploaded a lot just no
 export const postLimiter = perUser(HOUR, 120, 'You are posting very fast. Try again in a while.');
 export const commentLimiter = perUser(HOUR, 300, 'You are commenting very fast. Try again in a while.');
 export const messageLimiter = perUser(HOUR, 1000, 'You are sending messages very fast. Try again in a while.');
+export const callLimiter = perUser(HOUR, 120, 'You are calling very fast. Try again in a while.');
 export const followLimiter = perUser(HOUR, 400, 'You are following people very fast. Try again in a while.');
 export const friendLimiter = perUser(HOUR, 200, 'You are sending friend requests very fast. Try again in a while.');
 export const reportLimiter = perUser(HOUR, 30, 'You have sent a lot of reports. Try again later.');

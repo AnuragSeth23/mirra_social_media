@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Avatar } from '../components/Avatar';
 import { BackButton } from '../components/BackButton';
+import { useCall } from '../components/CallProvider';
+import { PhoneIcon, VideoIcon } from '../components/Icons';
 import { Linkify } from '../components/Linkify';
 import { Topbar } from '../components/Topbar';
 import { api, ApiError, MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, uploadMedia } from '../lib/api';
@@ -24,9 +26,25 @@ function SharedPost({ post }) {
   );
 }
 
+/** A finished call, shown in the thread like a message. */
+function CallCard({ call }) {
+  if (call.unavailable) return <div className="call-card">Call</div>;
+  const what = call.kind === 'video' ? 'video call' : 'voice call';
+  const m = Math.floor(call.seconds / 60);
+  const text =
+    call.outcome === 'completed' ? `${call.kind === 'video' ? 'Video' : 'Voice'} call · ${m}:${String(call.seconds % 60).padStart(2, '0')}` : call.outcome === 'declined' ? `Declined ${what}` : call.outcome === 'missed' ? `Missed ${what}` : `Cancelled ${what}`;
+  return (
+    <div className={`call-card${call.outcome === 'missed' || call.outcome === 'declined' ? ' bad' : ''}`}>
+      {call.kind === 'video' ? <VideoIcon /> : <PhoneIcon />}
+      {text}
+    </div>
+  );
+}
+
 /** One conversation. New messages are fetched every 4 s while the tab is open. */
 export function Chat() {
   const { id } = useParams();
+  const { startCall, busy } = useCall();
   const navigate = useNavigate();
   const [peer, setPeer] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -116,6 +134,15 @@ export function Chat() {
     }
   };
 
+  async function call(kind) {
+    setError('');
+    try {
+      await startCall(id, kind);
+    } catch (err) {
+      setError(err.message || 'Could not start the call.');
+    }
+  }
+
   async function acceptRequest() {
     setError('');
     try {
@@ -161,6 +188,14 @@ export function Chat() {
                 <strong>{peer.fullName}</strong>
                 <span>@{peer.username}</span>
               </Link>
+              <div className="call-btns">
+                <button type="button" className="call-btn" onClick={() => call('voice')} disabled={busy || request.incoming || request.outgoing} aria-label="Start a voice call" title="Voice call">
+                  <PhoneIcon />
+                </button>
+                <button type="button" className="call-btn" onClick={() => call('video')} disabled={busy || request.incoming || request.outgoing} aria-label="Start a video call" title="Video call">
+                  <VideoIcon />
+                </button>
+              </div>
             </>
           )}
         </header>
@@ -170,6 +205,7 @@ export function Chat() {
             <div key={m.id} className={`bubble ${m.mine ? 'mine' : 'theirs'} ${m.media || m.sharedPost ? 'has-media' : ''}`}>
               {m.media && (m.media.type === 'video' ? <video className="msg-media" src={m.media.url} controls playsInline preload="metadata" /> : <img className="msg-media" src={m.media.url} alt="Photo" loading="lazy" />)}
               {m.sharedPost && <SharedPost post={m.sharedPost} />}
+              {m.call && <CallCard call={m.call} />}
               {m.body && (
                 <p>
                   <Linkify text={m.body} />

@@ -10,6 +10,7 @@ Three layers, all automated. Start the app first (`run.bat`), then `test-all.bat
 | API: privacy and security | `server/scripts/privacy-smoke.js` | 176 | API + database |
 | API: sign-up code choice and account recovery | `server/scripts/recovery-smoke.js` | 58 | API + database |
 | API: chat (requests, photos/videos, shared posts) | `server/scripts/chat-smoke.js` | 26 | API + database |
+| API: voice/video calls (rules, busy, handshake, end, missed, dropped, privacy) | `server/scripts/call-smoke.js` | 30 | API + database |
 | Browser (Playwright, Chrome) | `e2e/tests/*.spec.js` | 64 | API + web + Google Chrome |
 
 The API suites read one-time codes from `verification_codes.dev_code` (filled in development only). The browser suite uses a fake camera and microphone, so it runs without hardware. Run the browser suite against another address with `WEB_URL=http://localhost:5174`.
@@ -23,6 +24,8 @@ For tests, put `DISABLE_RATE_LIMITS=1` in `server/.env`. The app refuses to star
 **Forgot password and forgot username**: code to the email or phone (a username chooses which) · a phone number lists every account that uses it, and any one can be reset · nothing resets before the code is verified · a verified contact cannot reset an account it does not own · 15-minute reset window · suspended accounts not listed · old password stops working and old sessions end · unknown and real identifiers answer the same, with the same try-limits · at most 5 codes per contact per hour · sign-up, recovery and 2FA tickets cannot be mixed up · the code can be shown on screen in development.
 
 **Chat**: first message to a non-friend is a request (Requests tab, Accept or Decline, replying accepts) · the sender sees "Message request sent..." instead of an error · photo and video messages with preview · a shared post or reel is a card, built for the reader (hidden posts turn into "no longer available") · you cannot share a post you cannot see · back button inside the chat.
+
+**Calls**: voice and video buttons in the chat header (disabled while a message request is pending) · ringing popup with Accept/Decline for the other person · real audio/video both ways, mute and camera toggles, running timer · either side can end · declined / cancelled / missed / completed calls leave a card in the chat · busy and block/privacy rules refused (3 browser tests, `e2e/tests/07-calls.spec.js`).
 
 **Reels**: several photos and videos in one reel · a photo defaults to 5 s, 1 to 30 s allowed, − / + · reorder and remove · at most 10 items · the reel frame takes the picture's shape (nothing cropped) · progress bar per item · like / comment / share on a dark pad inside the frame · back button on the reel · only the author under the picture · double-click refreshes Home and Reels.
 

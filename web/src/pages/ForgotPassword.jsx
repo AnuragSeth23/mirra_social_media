@@ -10,8 +10,26 @@ import { saveSignInId } from '../lib/signinId';
 import { rules } from '../lib/validation';
 
 const RESEND_SECONDS = 60;
-// An @ means an email, digits (with an optional +) a phone number, anything else a username.
-const looksLikeUsername = (v) => !!v.trim() && !v.includes('@') && !/^\+?[\d\s().-]{7,}$/.test(v.trim());
+// An @ means an email, digits (with an optional + and spaces/dashes) a phone number, anything else a username.
+// A phone number is recognised from the first digit typed, so the "email or phone" choice never appears for a number.
+const isPhoneLike = (v) => /^\+?[\d\s().-]+$/.test(v.trim()) && /\d/.test(v);
+const looksLikeUsername = (v) => !!v.trim() && !v.includes('@') && !isPhoneLike(v);
+
+/** Digits of a mobile number typed without "+", with a leading 0 / 91 / 0091 removed. */
+function nationalDigits(v) {
+  let d = v.replace(/\D/g, '');
+  if (d.startsWith('0091')) d = d.slice(4);
+  else if (d.startsWith('91') && d.length > 10) d = d.slice(2);
+  else if (d.startsWith('0')) d = d.slice(1);
+  return d;
+}
+/** Shown as soon as the first wrong digit is typed. Numbers starting with + (other countries) are left to the server. */
+function phoneProblem(v) {
+  const t = v.trim();
+  if (!isPhoneLike(t) || t.startsWith('+')) return '';
+  const d = nationalDigits(t);
+  return d && !/^[6-9]/.test(d) ? 'A mobile number starts with 6, 7, 8 or 9.' : '';
+}
 
 /**
  * Forgot password and forgot username, one flow (like Instagram / Facebook):
@@ -38,6 +56,7 @@ export function ForgotPassword() {
   const [busy, setBusy] = useState(false);
   const [cooldown, setCooldown] = useState(0);
   const byUsername = looksLikeUsername(identifier);
+  const numberProblem = phoneProblem(identifier);
 
   useEffect(() => {
     if (cooldown <= 0) return;
@@ -62,6 +81,10 @@ export function ForgotPassword() {
     setFormError('');
     setNotice('');
     if (!identifier.trim()) return setErrors({ identifier: 'Enter your username, email or phone.' });
+    if (numberProblem) return setErrors({ identifier: numberProblem });
+    if (isPhoneLike(identifier) && !identifier.trim().startsWith('+') && nationalDigits(identifier).length !== 10) {
+      return setErrors({ identifier: 'Enter the full 10-digit mobile number.' });
+    }
     setBusy(true);
     try {
       const r = await api('/auth/recover/start', { method: 'POST', body: { identifier, ...(byUsername ? { channel } : {}) }, auth: false });
@@ -133,14 +156,17 @@ export function ForgotPassword() {
       {step === 'ask' && (
         <>
           <h1>Find your account</h1>
-          <p className="lede">Forgot your password or your username? Enter your username, email or mobile number (like 98765 43210 or +91 98765 43210).</p>
+          <p className="lede">Forgot your password or your username? Enter your username, email or mobile number.</p>
           <form onSubmit={sendCode} noValidate className="stack">
             {formError && <FormAlert>{formError}</FormAlert>}
             <Field
               label="Username, email or phone"
               value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
-              error={errors.identifier}
+              onChange={(e) => {
+                setIdentifier(e.target.value);
+                setErrors({}); // an old message must not stay while the person is fixing the input
+              }}
+              error={errors.identifier || numberProblem}
               autoComplete="off"
               autoCapitalize="none"
               spellCheck={false}

@@ -23,9 +23,15 @@ const peerOf = (r) => ({ id: fromBin(r.peer_id), username: r.username, fullName:
 /** 1:1 chats are unique per pair: dm_key = "<smaller id>_<larger id>" (readable ids, not encrypted). */
 const dmKey = (a, b) => [toBin(a), toBin(b)].sort().join('_');
 
-const MESSAGE_COLUMNS = 'id, sender_id, body, media_type, storage_key, shared_post_id, created_at';
+const MESSAGE_COLUMNS = 'id, sender_id, body, media_type, storage_key, shared_post_id, call_id, created_at';
 
-function toMessage(r, me, previews) {
+/** What a finished call looks like in the chat: completed (with its length), declined, missed (nobody answered) or cancelled (the caller gave up). */
+function callCard(c, me) {
+  if (!c) return { unavailable: true };
+  return { kind: c.kind, outcome: c.answered_at ? 'completed' : c.status, seconds: c.answered_at && c.seconds != null ? Number(c.seconds) : 0, outgoing: fromBin(c.caller_id) === me };
+}
+
+function toMessage(r, me, previews, calls = new Map()) {
   return {
     id: fromBin(r.id),
     body: r.body ?? '',
@@ -33,14 +39,22 @@ function toMessage(r, me, previews) {
     createdAt: r.created_at.toISOString(),
     media: r.storage_key ? { type: r.media_type, url: mediaUrl(r.storage_key) } : null,
     sharedPost: r.shared_post_id ? (previews.get(fromBin(r.shared_post_id)) ?? { unavailable: true }) : null,
+    call: r.call_id ? callCard(calls.get(fromBin(r.call_id)), me) : null,
   };
+}
+
+async function callsFor(rows) {
+  const ids = [...new Set(rows.filter((r) => r.call_id).map((r) => fromBin(r.call_id)))];
+  if (!ids.length) return new Map();
+  const found = await q(pool, 'SELECT id, kind, status, caller_id, answered_at, TIMESTAMPDIFF(SECOND, answered_at, ended_at) AS seconds FROM calls WHERE id IN (?)', [ids.map(toBin)]);
+  return new Map(found.map((c) => [fromBin(c.id), c]));
 }
 
 const CLOSED = () => new AppError(403, 'messages_closed', 'You can’t message this account.');
 const ACTIVE_MS = 5 * 60_000;
 
 /** The recipient's setting, applied to this sender. */
-function mayMessage(setting, rel) {
+export function mayMessage(setting, rel) {
   if (rel.blocked) return false;
   if (setting === 'nobody') return false;
   if (setting === 'friends') return rel.friends;
@@ -48,7 +62,7 @@ function mayMessage(setting, rel) {
   return true;
 }
 
-async function settingsOf(db, userId) {
+export async function settingsOf(db, userId) {
   const [s] = await q(db, `SELECT COALESCE(s.messages_from, 'everyone') AS messages_from, COALESCE(s.read_receipts, 1) AS read_receipts, COALESCE(s.show_activity_status, 1) AS show_activity_status
                              FROM users u LEFT JOIN user_settings s ON s.user_id = u.id WHERE u.id = ?`, [toBin(userId)]);
   return s ?? { messages_from: 'everyone', read_receipts: 1, show_activity_status: 1 };
@@ -104,7 +118,7 @@ export async function conversations(me, folder = 'inbox') {
   const rows = await q(
     pool,
     `SELECT c.id, c.last_message_at, u.id AS peer_id, u.username, u.full_name, u.avatar_key, me.request_pending,
-            (SELECT CASE WHEN m.shared_post_id IS NOT NULL THEN '📎 Shared a post' WHEN m.media_type = 'image' THEN '📷 Photo' WHEN m.media_type = 'video' THEN '🎥 Video' ELSE m.body END
+            (SELECT CASE WHEN m.call_id IS NOT NULL THEN '📞 Call' WHEN m.shared_post_id IS NOT NULL THEN '📎 Shared a post' WHEN m.media_type = 'image' THEN '📷 Photo' WHEN m.media_type = 'video' THEN '🎥 Video' ELSE m.body END
                FROM messages m WHERE m.conversation_id = c.id AND m.deleted_at IS NULL ORDER BY m.id DESC LIMIT 1) AS last_body,
             (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.sender_id <> ? AND m.deleted_at IS NULL
                 AND (me.last_read_at IS NULL OR m.created_at > me.last_read_at)) AS unread
@@ -137,6 +151,7 @@ export async function thread(me, cid, after) {
   );
   // Shared posts are shown as cards, and only if THIS reader may see the post.
   const previews = await postPreviews(me, [...new Set(rows.filter((r) => r.shared_post_id).map((r) => fromBin(r.shared_post_id)))]);
+  const calls = await callsFor(rows);
   await exec(pool, 'UPDATE conversation_members SET last_read_at = NOW(3) WHERE conversation_id = ? AND user_id = ?', [toBin(cid), toBin(me)]);
 
   // Receipts and activity status are mutual, and never shown to someone the other person restricted.
@@ -150,7 +165,7 @@ export async function thread(me, cid, after) {
 
   return {
     peer: peerOf(peer),
-    messages: rows.reverse().map((r) => toMessage(r, me, previews)),
+    messages: rows.reverse().map((r) => toMessage(r, me, previews, calls)),
     peerReadAt,
     activity,
     // incoming: someone outside my friends wrote first and waits for my answer; outgoing: I wrote first and am waiting

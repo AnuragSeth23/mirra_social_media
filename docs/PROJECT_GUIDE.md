@@ -177,6 +177,8 @@ Blocking inserts into `blocks`, removes follows in both directions (and fixes co
 
 ### 5.8 Chat
 Each pair gets one conversation (unique `dm_key` = the two ids sorted). A message is text, a **photo or video** (uploaded first, then sent by key), or a **shared post/reel card**. The page asks for new messages every 4 seconds (**polling**), and pauses when the tab is hidden. A real-time version would use WebSockets (Socket.IO).
+**Voice and video calls:** the chat header has a phone and a camera button. Audio and video travel directly between the two browsers (WebRTC); the API (`/api/v1/calls`, tables `calls` and `call_signals`) only carries the handshake notes, which both browsers fetch by polling once a second (this also tells the server each side is still there). A call rings for 45 s, then becomes *missed*; a side silent for 20 s ends the call. Each finished call adds a card to the chat (`messages.call_id`). **Limit:** only Google STUN is used, no TURN relay, so two people behind strict NATs may not connect; set `VITE_ICE_SERVERS` (JSON) to add one.
+
 **Message requests (why a second message can wait):** if the person is not your friend, your first message lands in their *Requests* folder and you may send only that one until they accept (or reply). The chat then closes the composer and says "Message request sent... you can send more once they do" instead of showing an error (`canSend` in the thread answer). The chat has its own back button.
 
 ### 5.9 Notifications
