@@ -954,3 +954,30 @@ span.avatar-sm { color: #fff !important; }
 .suggest.strip li .who { align-items: center; width: 100%; }
 .suggest.strip li .who strong, .suggest.strip li .who span { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .suggest.strip li .btn { width: 100%; }
+
+/* ---------- voice and video calls ---------- */
+.chat-head .call-btns { margin-left: auto; display: flex; gap: 0.4rem; }
+.call-btn { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; border: 1.5px solid var(--line); background: var(--surface); color: var(--brand); cursor: pointer; }
+.call-btn:hover:not(:disabled) { border-color: var(--brand); }
+.call-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.call-card { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; }
+.call-card svg { width: 20px; height: 20px; flex: none; }
+.call-card.bad { color: var(--danger); }
+.bubble.mine .call-card.bad { color: inherit; }
+.call-toast { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 14px); transform: translateX(-50%); z-index: 90; background: var(--ink); color: var(--bg); padding: 0.6rem 1.1rem; border-radius: 999px; font-weight: 600; max-width: 92vw; }
+.call-ring, .call-screen { position: fixed; z-index: 80; color: #f2fbf9; }
+.call-ring { top: calc(env(safe-area-inset-top, 0px) + 12px); left: 50%; transform: translateX(-50%); width: min(420px, 94vw); background: #0a5c56; border-radius: 20px; padding: 0.9rem 1rem; display: flex; align-items: center; gap: 0.8rem; box-shadow: 0 12px 40px rgba(0,0,0,0.35); }
+.call-ring .who { flex: 1; min-width: 0; display: grid; }
+.call-ring .who span { opacity: 0.8; font-size: 0.85rem; }
+.call-round { width: 48px; height: 48px; display: grid; place-items: center; border-radius: 50%; border: 0; cursor: pointer; color: #fff; background: #ffffff26; }
+.call-round.go { background: #1d9f62; }
+.call-round.stop { background: #c9402a; }
+.call-round.off { background: #fff; color: #10302e; }
+.call-screen { inset: 0; background: #06201d; display: flex; flex-direction: column; align-items: center; justify-content: center; padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px); }
+.call-remote { width: 100%; flex: 1; min-height: 0; object-fit: contain; background: #000; }
+.call-remote.off { position: absolute; width: 1px; height: 1px; opacity: 0; flex: none; }
+.call-local { position: absolute; right: 14px; top: calc(env(safe-area-inset-top, 0px) + 14px); width: 110px; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 14px; border: 2px solid #ffffff55; background: #000; transform: scaleX(-1); }
+.call-info { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 18px); left: 16px; display: grid; }
+.call-info span { opacity: 0.8; font-size: 0.9rem; }
+.call-voice { display: grid; justify-items: center; gap: 0.6rem; margin: auto; text-align: center; }
+.call-bar { display: flex; gap: 1rem; padding: 1rem; justify-content: center; }

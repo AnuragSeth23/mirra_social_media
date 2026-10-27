@@ -11,6 +11,7 @@ import { accountRouter } from './modules/account/account.routes.js';
 import { friendsRouter } from './modules/friends/friends.routes.js';
 import { moderationRouter } from './modules/moderation/moderation.routes.js';
 import { privacyRouter } from './modules/privacy/privacy.routes.js';
+import { callsRouter } from './modules/calls/calls.routes.js';
 import { messagesRouter } from './modules/messages/messages.routes.js';
 import { notificationsRouter } from './modules/notifications/notifications.routes.js';
 import { mediaRouter, postsRouter } from './modules/posts/posts.routes.js';
@@ -46,6 +47,7 @@ export function createApp() {
   app.use('/api/v1/stories', storiesRouter);
   app.use('/api/v1/notifications', notificationsRouter);
   app.use('/api/v1/messages', messagesRouter);
+  app.use('/api/v1/calls', callsRouter);
   app.use('/api/v1/safety', safetyRouter);
   app.use('/api/v1/account', accountRouter);
   app.use('/api/v1/friends', friendsRouter);
