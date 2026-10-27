@@ -194,6 +194,24 @@ const indStart = await call('POST', '/auth/recover/start', undefined, { identifi
 const indVerify = await call('POST', '/auth/recover/verify', undefined, { ticket: indStart.json.data.ticket, code: indStart.json.data.dev.code });
 expect('forgot username with a bare 10-digit Indian number finds the account', indVerify.status === 200 && indVerify.json.data.accounts.length === 1 && indVerify.json.data.accounts[0].username === aIn.u.username, indVerify.json);
 
+// ===================================================================== a phone number typed in any common way finds the account
+for (const [label, typed] of [
+  ['with the country code but no +', `91${ind.national}`],
+  ['with a leading 0', `0${ind.national}`],
+  ['with 00 for the +', `0091${ind.national}`],
+  ['with dashes', `+91-${ind.national.slice(0, 5)}-${ind.national.slice(5)}`],
+  ['with spaces and no country code', `${ind.national.slice(0, 5)} ${ind.national.slice(5)}`],
+]) {
+  const r = await call('POST', '/auth/recover/start', undefined, { identifier: typed });
+  const v = await call('POST', '/auth/recover/verify', undefined, { ticket: r.json?.data?.ticket ?? 'x'.repeat(30), code: r.json?.data?.dev?.code ?? '000000' });
+  expect(`the number typed ${label} finds the account (code goes to the phone)`, r.status === 200 && r.json.data.channel === 'phone' && v.status === 200 && v.json.data.accounts.some((a) => a.id === aIn.id), [typed, r.json, v.json]);
+}
+const lonelyNumber = await call('POST', '/auth/recover/start', undefined, { identifier: '9000000001' });
+const garbageNumber = await call('POST', '/auth/recover/start', undefined, { identifier: '12345678' });
+expect('a number with no account (or not a real number) still says "phone", never "email"', lonelyNumber.json.data.channel === 'phone' && garbageNumber.json.data.channel === 'phone', [lonelyNumber.json, garbageNumber.json]);
+const loginFormats = await Promise.all([`91${ind.national}`, `0${ind.national}`].map((id) => call('POST', '/auth/login', undefined, { identifier: id, password: 'tidepool47' })));
+expect('signing in with the number typed as 91… or 0… works as well', loginFormats.every((r) => r.status === 200), loginFormats.map((r) => r.json));
+
 // ===================================================================== nothing reveals whether an account exists
 const real = await call('POST', '/auth/recover/start', undefined, { identifier: a5.u.email });
 const fakeEmail = await call('POST', '/auth/recover/start', undefined, { identifier: `nobody.${stamp}@example.com` });

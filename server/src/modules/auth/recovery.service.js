@@ -6,7 +6,7 @@ import { fromBin, isUuid, toBin, uuidv7 } from '../../lib/ids.js';
 import { mediaUrl } from '../../lib/media.js';
 import { deliverCode } from '../../lib/otp-delivery.js';
 import { hashPassword } from '../../lib/password.js';
-import { maskEmail, maskPhone, phoneFromTyped } from '../../lib/phone.js';
+import { looksLikePhone, maskEmail, maskPhone, phoneFromTyped } from '../../lib/phone.js';
 import { signRecoveryTicket, verifyRecoveryTicket } from '../../lib/tokens.js';
 
 /*
@@ -54,7 +54,9 @@ async function resolveContact(identifier, channelPref) {
     [text.toLowerCase()],
   );
   // No such account, or it has no email (the email is optional) and the email was picked: nothing to send, and the answer looks the same.
-  if (!u || (channel === 'email' && !u.email_ciphertext)) return { channel, plain: null, hash: null, shown: null };
+  // A number nobody uses is still answered as a phone ("Check your phone"), never as an email, so the screen does not mislead.
+  if (!u) return { channel: looksLikePhone(text) ? 'phone' : channel, plain: null, hash: null, shown: null };
+  if (channel === 'email' && !u.email_ciphertext) return { channel, plain: null, hash: null, shown: null };
   const id = fromBin(u.id);
   return channel === 'email'
     ? { channel, plain: decryptField(u.email_ciphertext, emailAad(id), u.email_key_version), hash: u.email_hash, shown: null }

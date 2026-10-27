@@ -12,10 +12,18 @@ export function normalizePhone(input) {
  */
 export function phoneFromTyped(text) {
   const t = text.trim();
+  if (!/^\+?[\d\s().-]+$/.test(t)) return null; // letters and @ mean it is not a phone number
   if (t.startsWith('+')) return normalizePhone(t);
   const digits = t.replace(/\D/g, '');
-  return digits.length === 10 && /^[6-9]/.test(digits) && /^[\d\s().-]+$/.test(t) ? normalizePhone(`+91${digits}`) : null;
+  if (digits.startsWith('00')) return normalizePhone(`+${digits.slice(2)}`); // 0091 98765 43210
+  if (/^[6-9]\d{9}$/.test(digits)) return normalizePhone(`+91${digits}`); // 98765 43210
+  if (/^0[6-9]\d{9}$/.test(digits)) return normalizePhone(`+91${digits.slice(1)}`); // 098765 43210
+  if (/^91[6-9]\d{9}$/.test(digits)) return normalizePhone(`+${digits}`); // 919876543210 (country code without the +)
+  return null;
 }
+
+/** Does it look like somebody typed a phone number (digits, spaces, dashes, an optional +)? Says nothing about whether it is valid. */
+export const looksLikePhone = (text) => /^\+?[\d\s().-]{7,}$/.test(text.trim());
 
 /** a***@gmail.com — enough to recognise your own address, not enough to guess someone else's. */
 export function maskEmail(email) {
