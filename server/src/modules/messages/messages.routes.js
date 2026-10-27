@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { AppError } from '../../lib/errors.js';
-import { isUuid } from '../../lib/ids.js';
+import { isId } from '../../lib/ids.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { messageLimiter } from '../../middleware/user-limits.js';
 import { validateBody } from '../../middleware/validate.js';
@@ -19,7 +19,7 @@ const wrap = (fn) => async (req, res, next) => {
   }
 };
 const id = (v) => {
-  if (typeof v !== 'string' || !isUuid(v)) throw new AppError(404, 'not_found', 'Not found.');
+  if (typeof v !== 'string' || !isId(v)) throw new AppError(404, 'not_found', 'Not found.');
   return v;
 };
 // A message is text, or a photo/video (mediaKey from POST /media, with optional text), or a shared post/reel (sharedPostId, with optional text).
@@ -27,7 +27,7 @@ const sendSchema = z
   .object({
     body: z.string().trim().max(4000, 'That message is too long.').optional(),
     mediaKey: z.string().max(120).optional(),
-    sharedPostId: z.string().uuid().optional(),
+    sharedPostId: z.string().refine(isId, 'Invalid id.').optional(),
   })
   .refine((v) => v.body || v.mediaKey || v.sharedPostId, { message: 'Write a message first.', path: ['body'] })
   .refine((v) => !(v.mediaKey && v.sharedPostId), { message: 'Send a file or a post, not both in one message.', path: ['mediaKey'] });
@@ -54,7 +54,7 @@ messagesRouter.post(
 );
 messagesRouter.get(
   '/:id',
-  wrap((req) => svc.thread(req.auth.userId, id(req.params.id), typeof req.query.after === 'string' && isUuid(req.query.after) ? req.query.after : undefined)),
+  wrap((req) => svc.thread(req.auth.userId, id(req.params.id), typeof req.query.after === 'string' && isId(req.query.after) ? req.query.after : undefined)),
 );
 messagesRouter.post(
   '/:id',

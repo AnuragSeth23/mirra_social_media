@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { AppError } from '../../lib/errors.js';
-import { isUuid } from '../../lib/ids.js';
+import { isId } from '../../lib/ids.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { reportLimiter } from '../../middleware/user-limits.js';
 import { validateBody } from '../../middleware/validate.js';
@@ -18,13 +18,13 @@ const wrap = (fn) => async (req, res, next) => {
   }
 };
 const id = (v) => {
-  if (typeof v !== 'string' || !isUuid(v)) throw new AppError(404, 'not_found', 'Not found.');
+  if (typeof v !== 'string' || !isId(v)) throw new AppError(404, 'not_found', 'Not found.');
   return v;
 };
 
 const reportSchema = z.object({
   targetType: z.enum(['user', 'post', 'comment', 'message']),
-  targetId: z.string().refine(isUuid, 'Invalid id.'),
+  targetId: z.string().refine(isId, 'Invalid id.'),
   reason: z.enum(svc.REPORT_REASONS),
   details: z.string().trim().max(1000, 'Keep details under 1,000 characters.').optional(),
 });

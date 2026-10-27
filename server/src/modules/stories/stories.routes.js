@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { AppError } from '../../lib/errors.js';
-import { isUuid } from '../../lib/ids.js';
+import { isId } from '../../lib/ids.js';
 import { KEY_RE } from '../../lib/media.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
@@ -19,7 +19,7 @@ const wrap = (fn) => async (req, res, next) => {
   }
 };
 const id = (v) => {
-  if (typeof v !== 'string' || !isUuid(v)) throw new AppError(404, 'not_found', 'Not found.');
+  if (typeof v !== 'string' || !isId(v)) throw new AppError(404, 'not_found', 'Not found.');
   return v;
 };
 

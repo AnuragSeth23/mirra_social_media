@@ -12,6 +12,8 @@ export const pool = mysql.createPool({
   timezone: 'Z', // DATETIME values are read and written as UTC
   charset: 'utf8mb4_0900_ai_ci',
   supportBigNumbers: true,
+  // BIGINT id columns come back as strings (like the ids in the app and in JSON); counts and other numbers stay numbers
+  typeCast: (field, next) => (field.type === 'LONGLONG' && /(^|_)id$/.test(field.name) ? field.string() : next()),
 });
 
 // Make NOW() and CURRENT_TIMESTAMP defaults UTC on every pooled connection.

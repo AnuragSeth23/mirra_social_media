@@ -1,5 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import mysql from 'mysql2/promise';
 import { config } from '../config/env.js';
 
@@ -20,13 +21,14 @@ async function main() {
     ) ENGINE=InnoDB`);
     const [rows] = await conn.query('SELECT name FROM schema_migrations');
     const applied = new Set(rows.map((r) => r.name));
-    const files = (await readdir(dir)).filter((f) => f.endsWith('.sql')).sort();
+    const files = (await readdir(dir)).filter((f) => f.endsWith('.sql') || f.endsWith('.js')).sort();
 
     for (const file of files) {
       if (applied.has(file)) continue;
-      const sql = await readFile(path.join(dir, file), 'utf8');
       try {
-        await conn.query(sql);
+        // .sql files run as written; .js files export a default async function (conn) for changes SQL cannot express
+        if (file.endsWith('.js')) await (await import(pathToFileURL(path.join(dir, file)).href)).default(conn);
+        else await conn.query(await readFile(path.join(dir, file), 'utf8'));
         await conn.query('INSERT INTO schema_migrations (name) VALUES (?)', [file]);
         console.log(`applied ${file}`);
       } catch (err) {

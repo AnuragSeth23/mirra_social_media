@@ -11,10 +11,10 @@
  */
 import { q } from '../db/pool.js';
 import { NOT_BLOCKED } from './blocks.js';
-import { toBin } from './ids.js';
+import { pairOf, toBin } from './ids.js';
 
 /** The same pair of people always gets the same key, whoever asked whom. */
-export const pairKey = (a, b) => [toBin(a), toBin(b)].sort().join('_'); // "<smaller id>_<larger id>", readable
+export const pairKey = (a, b) => pairOf(toBin(a), toBin(b)); // "<smaller id>_<larger id>", compared as numbers
 
 /** SQL: true when a and b are accepted friends. `a` and `b` are SQL expressions; four placeholders are NOT used, the expressions are inlined. */
 export const FRIENDS_SQL = (a, b) => `EXISTS (SELECT 1 FROM friendships fr WHERE fr.status = 'accepted'

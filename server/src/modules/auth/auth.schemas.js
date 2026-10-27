@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isId } from '../../lib/ids.js';
 
 const RESERVED = new Set(['admin', 'administrator', 'socialambak', 'ambak', 'support', 'help', 'root', 'system', 'security', 'official', 'moderator']);
 
@@ -72,7 +73,7 @@ export const recoverVerifySchema = z.object({ ticket: z.string().min(10).max(100
 
 export const recoverResetSchema = z.object({
   ticket: z.string().min(10).max(1000),
-  userId: z.string().uuid(),
+  userId: z.string().refine(isId, 'Invalid id.'),
   password: passwordSchema,
 });
 

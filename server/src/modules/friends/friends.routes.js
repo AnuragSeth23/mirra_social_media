@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { pool, q } from '../../db/pool.js';
 import { AppError } from '../../lib/errors.js';
-import { fromBin, isUuid } from '../../lib/ids.js';
+import { fromBin, isId } from '../../lib/ids.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { friendLimiter } from '../../middleware/user-limits.js';
 import { validateBody } from '../../middleware/validate.js';
@@ -19,12 +19,12 @@ const wrap = (fn) => async (req, res, next) => {
   }
 };
 const id = (v) => {
-  if (typeof v !== 'string' || !isUuid(v)) throw new AppError(404, 'not_found', 'Not found.');
+  if (typeof v !== 'string' || !isId(v)) throw new AppError(404, 'not_found', 'Not found.');
   return v;
 };
 const me = (req) => req.auth.userId;
 
-const requestSchema = z.object({ userId: z.string().refine(isUuid, 'Invalid id.') }).strict();
+const requestSchema = z.object({ userId: z.string().refine(isId, 'Invalid id.') }).strict();
 
 friendsRouter.get('/', wrap((req) => svc.friendsOf(me(req), me(req))));
 friendsRouter.get('/requests', wrap((req) => svc.requests(me(req), req.query.direction === 'outgoing' ? 'outgoing' : 'incoming')));

@@ -2,7 +2,7 @@ import { config } from '../../config/env.js';
 import { exec, pool, q, tx } from '../../db/pool.js';
 import { blindIndex, decryptField, emailAad, emailIndex, encryptField, CURRENT_KEY_VERSION, hashOtp, randomOtp, randomToken, safeEqual, sha256 } from '../../lib/crypto.js';
 import { AppError, conflict, forbidden, tooMany, unauthorized } from '../../lib/errors.js';
-import { fromBin, isUuid, toBin, uuidv7 } from '../../lib/ids.js';
+import { fromBin, isId, toBin } from '../../lib/ids.js';
 import { deliverCode } from '../../lib/otp-delivery.js';
 import { burnPasswordCheck, hashPassword, verifyPassword } from '../../lib/password.js';
 import { mobileProblem, normalizePhone, phoneFromTyped } from '../../lib/phone.js';
@@ -78,15 +78,16 @@ async function sendWaitSeconds(db, userId, channel, purpose = 'signup') {
 
 // ---------------------------------------------------------------- sessions
 
-async function createSession(db, userId, meta, familyId = uuidv7()) {
-  const sessionId = uuidv7();
+async function createSession(db, userId, meta, familyId = null) {
   const refreshToken = randomToken();
-  await exec(
+  const { insertId } = await exec(
     db,
-    `INSERT INTO sessions (id, user_id, family_id, refresh_token_hash, user_agent, ip, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, NOW(3) + INTERVAL ? DAY)`,
-    [toBin(sessionId), toBin(userId), toBin(familyId), sha256(refreshToken), meta.userAgent?.slice(0, 300) ?? null, meta.ip?.slice(0, 45) ?? null, config.REFRESH_TOKEN_TTL_DAYS],
+    `INSERT INTO sessions (user_id, family_id, refresh_token_hash, user_agent, ip, expires_at)
+     VALUES (?, ?, ?, ?, ?, NOW(3) + INTERVAL ? DAY)`,
+    [toBin(userId), familyId ? toBin(familyId) : 0, sha256(refreshToken), meta.userAgent?.slice(0, 300) ?? null, meta.ip?.slice(0, 45) ?? null, config.REFRESH_TOKEN_TTL_DAYS],
   );
+  const sessionId = String(insertId);
+  if (!familyId) await exec(db, 'UPDATE sessions SET family_id = id WHERE id = ?', [sessionId]); // a new sign-in starts a refresh-token family named after its first session
   return {
     sessionId,
     tokens: { accessToken: signAccessToken(userId, sessionId), refreshToken, expiresIn: config.ACCESS_TOKEN_TTL_SECONDS },
@@ -173,7 +174,7 @@ export async function signup(input, meta) {
   const phoneHash = blindIndex(phone);
   const emailHash = input.email ? emailIndex(input.email) : null;
   const passwordHash = await hashPassword(input.password);
-  const userId = uuidv7();
+  let userId;
 
   const code = await tx(async (c) => {
     // Free up details held by sign-ups that were never verified.
@@ -194,13 +195,15 @@ export async function signup(input, meta) {
     if (taken.length) throw conflict('account_exists', 'Some of these details are already in use.', taken);
 
     try {
-      await exec(
+      // The encrypted fields are bound to the user's id, which the database hands out on insert, so they are filled in right after.
+      const inserted = await exec(
         c,
-        `INSERT INTO users (id, username, full_name, email_ciphertext, email_hash, email_key_version, phone_ciphertext, phone_hash, phone_key_version, password_hash, date_of_birth, signup_channel)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [toBin(userId), input.username, input.fullName, input.email ? encryptField(input.email, emailAad(userId)) : null, emailHash, CURRENT_KEY_VERSION,
-          encryptField(phone, phoneAad(userId)), phoneHash, CURRENT_KEY_VERSION, passwordHash, input.dateOfBirth, input.verifyVia],
+        `INSERT INTO users (username, full_name, email_ciphertext, email_hash, email_key_version, phone_ciphertext, phone_hash, phone_key_version, password_hash, date_of_birth, signup_channel)
+         VALUES (?, ?, NULL, ?, ?, '', ?, ?, ?, ?, ?)`,
+        [input.username, input.fullName, emailHash, CURRENT_KEY_VERSION, phoneHash, CURRENT_KEY_VERSION, passwordHash, input.dateOfBirth, input.verifyVia],
       );
+      userId = String(inserted.insertId);
+      await exec(c, 'UPDATE users SET email_ciphertext = ?, phone_ciphertext = ? WHERE id = ?', [input.email ? encryptField(input.email, emailAad(userId)) : null, encryptField(phone, phoneAad(userId)), toBin(userId)]);
     } catch (err) {
       const field = duplicateToField(err); // lost a race with a concurrent sign-up
       if (field) throw conflict('account_exists', 'Some of these details are already in use.', [field]);
@@ -230,7 +233,7 @@ export async function checkAvailability(username, email) {
 
 function ticketUser(ticket) {
   const { sub } = verifyTicket(ticket);
-  if (!isUuid(sub)) throw unauthorized('invalid_token', 'Start sign-up again.');
+  if (!isId(sub)) throw unauthorized('invalid_token', 'Start sign-up again.');
   return sub;
 }
 
@@ -370,7 +373,7 @@ export async function login(identifier, password, meta) {
 /** Second step of a two-factor sign-in: the ticket from the password step plus an authenticator code or a backup code. */
 export async function loginWithSecondFactor(ticket, code, meta) {
   const { sub: userId } = verifyTwoFactorTicket(ticket);
-  if (!isUuid(userId)) throw unauthorized('invalid_token', 'Sign in again.');
+  if (!isId(userId)) throw unauthorized('invalid_token', 'Sign in again.');
   const [user] = await q(pool, `SELECT status, deleted_at, totp_enabled_at FROM users WHERE id = ?`, [toBin(userId)]);
   if (!user || user.deleted_at || !user.totp_enabled_at || user.status === 'suspended') throw unauthorized('invalid_token', 'Sign in again.');
   if (!(await checkSecondFactor(userId, code))) {

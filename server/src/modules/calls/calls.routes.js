@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { AppError } from '../../lib/errors.js';
-import { isUuid } from '../../lib/ids.js';
+import { isId } from '../../lib/ids.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { callLimiter } from '../../middleware/user-limits.js';
 import { validateBody } from '../../middleware/validate.js';
@@ -19,11 +19,11 @@ const wrap = (fn) => async (req, res, next) => {
   }
 };
 const id = (v) => {
-  if (typeof v !== 'string' || !isUuid(v)) throw new AppError(404, 'not_found', 'Not found.');
+  if (typeof v !== 'string' || !isId(v)) throw new AppError(404, 'not_found', 'Not found.');
   return v;
 };
 
-const startSchema = z.object({ conversationId: z.string().uuid(), kind: z.enum(['voice', 'video']) });
+const startSchema = z.object({ conversationId: z.string().refine(isId, 'Invalid id.'), kind: z.enum(['voice', 'video']) });
 // One handshake note: an SDP offer/answer ({ type, sdp }) or an ICE candidate ({ candidate, sdpMid, sdpMLineIndex, ... }).
 const signalSchema = z.object({ type: z.enum(['offer', 'answer', 'ice']), payload: z.record(z.string(), z.any()) });
 

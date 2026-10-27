@@ -1,4 +1,4 @@
-import { isUuid } from '../../lib/ids.js';
+import { isId } from '../../lib/ids.js';
 import { AppError } from '../../lib/errors.js';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -64,7 +64,7 @@ const passwordAndCode = z.object({ password: z.string().min(1).max(128), code: z
 accountRouter.get('/sessions', wrap((req) => svc.listSessions(req.auth.userId, req.auth.sessionId)));
 accountRouter.post('/sessions/revoke-others', wrap((req) => svc.revokeOtherSessions(req.auth.userId, req.auth.sessionId)));
 accountRouter.delete('/sessions/:id', wrap((req) => {
-  if (!isUuid(req.params.id)) throw new AppError(404, 'not_found', 'Session not found.');
+  if (!isId(req.params.id)) throw new AppError(404, 'not_found', 'Session not found.');
   return svc.revokeSession(req.auth.userId, req.params.id);
 }));
 

@@ -79,7 +79,7 @@ socialambak/
       config/env.js           reads and VALIDATES settings; refuses unsafe production settings
       db/pool.js              connection pool + helpers q() / exec() / tx() (transaction)
       db/migrate.js           applies migrations/*.sql once each
-      lib/                    crypto, ids (UUIDv7), tokens, passwords, phone, media upload,
+      lib/                    crypto, ids (numbers), tokens, passwords, phone, media upload,
                               hashtags, blocks (SQL fragment), OTP delivery, errors
       middleware/             auth (who are you), validate, rate limits, error handler
       modules/
@@ -117,7 +117,7 @@ socialambak/
 
 Key design decisions:
 
-1. **IDs are UUIDv7 stored as readable text, `CHAR(36)`, and are never encrypted.** An id is an identifier, not a secret, and keeping it readable means you can search it in any database client (`WHERE id = '01a1680e-...'`). v7 starts with a timestamp, so new rows go to the end of the index (fast inserts) and ids are not guessable like 1, 2, 3. They also sort by time (text and bytes sort the same way), which gives us **cursor pagination**: "give me posts with id smaller than X". (They were `BINARY(16)` at first; migration 007 converted all 68 id columns without losing a row.)
+1. **IDs are plain numbers (1, 2, 3, ...) and are never encrypted.** An id is an identifier, not a secret, and a number reads the same in any database client (`WHERE id = 42`). They are `BIGINT UNSIGNED AUTO_INCREMENT`, so MySQL hands them out and they sort by time. They are guessable, so every endpoint checks that you may see the row (see the privacy tests). Things that were bound to an id (the encrypted email/phone, which use the user id as associated data) are bound to the number.
 2. **Counters are stored on the row** (`like_count`, `comment_count`, `followers_count`...). Reading is instant. They are updated in the **same transaction** as the action, and only when a row really changed (`INSERT IGNORE` / `affectedRows`), so a double click cannot count twice.
 3. **Soft delete** (`deleted_at`) for posts, comments and users, so history is not lost and counts can be fixed.
 4. **Everything in UTC** (`DATETIME(3)`), the app sets the connection time zone to `+00:00`.
@@ -299,7 +299,7 @@ zod schemas in the route file; failures return 422 with the field name and messa
 Services throw `AppError(status, code, message)`; one error handler turns it into JSON. Unknown errors are logged on the server and the client only sees a generic message (no stack traces leak).
 
 **Q18. How does pagination work?**
-Cursor-based: the client sends the id of the last post it has; the server returns older ones (`id < cursor`) and the next cursor. Because ids are UUIDv7 (time-ordered) this is stable even when new posts arrive, unlike page numbers.
+Cursor-based: the client sends the id of the last post it has; the server returns older ones (`id < cursor`) and the next cursor. Because ids only grow (auto-increment) this is stable even when new posts arrive, unlike page numbers.
 
 **Q19. What is a transaction and where do you use it?**
 All-or-nothing group of SQL statements. Used wherever more than one table changes: creating a post (post + media + counter + tags), like (row + counter + notification), follow, block, delete.
@@ -317,8 +317,8 @@ Random file names, type from magic bytes, allow-list of types, separate size lim
 IP limits for login, sign-up and codes; per-account limits for uploads, posts, comments, messages, follows, reports. In-memory today, so with several servers you would move them to Redis.
 
 ### D. Database
-**Q24. Why UUIDv7 and `BINARY(16)`?**
-Time-ordered (fast inserts, easy cursor paging), hard to guess, and 16 bytes instead of 36 characters, so indexes are smaller.
+**Q24. Why plain auto-increment numbers for ids?**
+They are readable (easy to demo and debug), small (indexes stay compact), and ordered by time (cursor paging is simple). The cost is that they are guessable, so the server never relies on an id being secret: every read checks who may see the row. If ids must hide the number of users or posts, switch the public side to a separate random token.
 
 **Q25. Why store counters on the row instead of `COUNT(*)`?**
 Reading a feed needs counts for 10 posts at once; `COUNT(*)` on millions of likes is slow. The price is keeping them correct, which is why updates happen in transactions and are tested.

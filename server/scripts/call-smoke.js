@@ -64,7 +64,7 @@ expect('nobody can call while a message request is still waiting (403)', early.s
 await call('POST', `/messages/${stranger}/accept`, b.token);
 const noAuth = await call('POST', '/calls', undefined, { conversationId: stranger, kind: 'voice' });
 const badKind = await call('POST', '/calls', a.token, { conversationId: stranger, kind: 'hologram' });
-const ghostChat = await call('POST', '/calls', a.token, { conversationId: '00000000-0000-7000-8000-000000000000', kind: 'voice' });
+const ghostChat = await call('POST', '/calls', a.token, { conversationId: '999999999', kind: 'voice' });
 const outsiderCall = await call('POST', '/calls', c.token, { conversationId: stranger, kind: 'voice' });
 expect('a call needs sign-in (401), a real kind (422), an existing chat (404) and membership of that chat (404)', noAuth.status === 401 && badKind.status === 422 && ghostChat.status === 404 && outsiderCall.status === 404, [noAuth.status, badKind.status, ghostChat.status, outsiderCall.status]);
 

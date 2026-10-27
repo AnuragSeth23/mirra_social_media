@@ -1,6 +1,6 @@
 import { exec, pool, q } from '../db/pool.js';
 import { forbidden, unauthorized } from '../lib/errors.js';
-import { isUuid, toBin } from '../lib/ids.js';
+import { isId, toBin } from '../lib/ids.js';
 import { verifyAccessToken } from '../lib/tokens.js';
 
 /**
@@ -13,7 +13,7 @@ export const requireAuth = async (req, _res, next) => {
     const header = req.headers.authorization;
     if (!header?.startsWith('Bearer ')) throw unauthorized();
     const claims = verifyAccessToken(header.slice(7));
-    if (!isUuid(claims.sub) || !isUuid(claims.sid)) throw unauthorized('invalid_token');
+    if (!isId(claims.sub) || !isId(claims.sid)) throw unauthorized('invalid_token');
     const rows = await q(
       pool,
       `SELECT u.status FROM sessions s JOIN users u ON u.id = s.user_id

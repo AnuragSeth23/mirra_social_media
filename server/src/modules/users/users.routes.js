@@ -5,7 +5,7 @@ import { followLimiter } from '../../middleware/user-limits.js';
 import { validateBody } from '../../middleware/validate.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { AppError } from '../../lib/errors.js';
-import { isUuid } from '../../lib/ids.js';
+import { isId } from '../../lib/ids.js';
 import { connections, getProfile, incomingRequests, publicProfile, respondToRequest, search, setFollow, suggestions, updateProfile } from './users.service.js';
 
 export const usersRouter = Router();
@@ -69,7 +69,7 @@ usersRouter.get('/requests', requireAuth, async (req, res, next) => {
 for (const method of ['put', 'delete']) {
   usersRouter[method]('/requests/:followerId', requireAuth, async (req, res, next) => {
     try {
-      if (!isUuid(req.params.followerId)) throw new AppError(404, 'not_found', 'Not found.');
+      if (!isId(req.params.followerId)) throw new AppError(404, 'not_found', 'Not found.');
       res.json({ data: await respondToRequest(req.auth.userId, req.params.followerId, method === 'put') });
     } catch (err) {
       next(err);
@@ -105,7 +105,7 @@ usersRouter.get('/by/:username/connections', requireAuth, async (req, res, next)
 for (const method of ['put', 'delete']) {
   usersRouter[method]('/:id/follow', requireAuth, followLimiter, async (req, res, next) => {
     try {
-      if (!isUuid(req.params.id)) throw new AppError(404, 'not_found', 'Account not found.');
+      if (!isId(req.params.id)) throw new AppError(404, 'not_found', 'Account not found.');
       res.json({ data: { following: await setFollow(req.auth.userId, req.params.id, method === 'put') } });
     } catch (err) {
       next(err);

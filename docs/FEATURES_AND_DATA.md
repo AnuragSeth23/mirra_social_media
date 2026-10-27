@@ -2,7 +2,7 @@
 
 This file is generated from the real code and database (92 API endpoints, 33 tables). The rules behind it:
 
-- **IDs are never encrypted.** They are readable UUID text (`CHAR(36)`), so you can search them in any database client.
+- **IDs are never encrypted.** They are plain numbers (1, 2, 3, ...), `BIGINT UNSIGNED AUTO_INCREMENT`, so they read the same in any database client.
 - **Phone, email, passwords, one-time codes and tokens are never stored in plain text** (details in section 3).
 - Everything else (names, usernames, bio, captions, comments, **chat messages**) is stored as normal readable text.
 
@@ -55,7 +55,7 @@ This file is generated from the real code and database (92 API endpoints, 33 tab
 
 | Data | How it is stored | Column |
 | --- | --- | --- |
-| IDs (users, posts, every `*_id`) | Plain, readable UUID text | `id`, `user_id`, ... |
+| IDs (users, posts, every `*_id`) | Plain numbers (1, 2, 3, ...) | `id`, `user_id`, ... |
 | Password | argon2id hash (never the password) | `users.password_hash` |
 | Mobile number | AES-256-GCM ciphertext (tied to the user id) + HMAC hash to look it up | `phone_ciphertext`, `phone_hash` |
 | Email | AES-256-GCM ciphertext + HMAC hash | `email_ciphertext`, `email_hash` |
@@ -108,10 +108,10 @@ Ciphertexts and hashes are saved as lowercase hex text, so a database client sho
 Security and account events (login, failed login, password reset, 2FA...).
 
 - `id bigint unsigned`
-- `user_id char(36)?`
+- `user_id bigint unsigned?`
 - `action varchar(40)`
 - `target_type varchar(20)?`
-- `target_id char(36)?`
+- `target_id bigint unsigned?`
 - `metadata json?`
 - `created_at datetime(3)`
 
@@ -119,7 +119,7 @@ Security and account events (login, failed login, password reset, 2FA...).
 Two-factor backup codes (stored hashed, each usable once).
 
 - `id bigint unsigned`
-- `user_id char(36)`
+- `user_id bigint unsigned`
 - `code_hash char(64)` #️⃣ hash / key (hex text)
 - `used_at datetime(3)?`
 - `created_at datetime(3)`
@@ -127,24 +127,24 @@ Two-factor backup codes (stored hashed, each usable once).
 ### blocks
 Who blocked whom.
 
-- `blocker_id char(36)`
-- `blocked_id char(36)`
+- `blocker_id bigint unsigned`
+- `blocked_id bigint unsigned`
 - `created_at datetime(3)`
 
 ### comment_likes
 Who liked which comment.
 
-- `comment_id char(36)`
-- `user_id char(36)`
+- `comment_id bigint unsigned`
+- `user_id bigint unsigned`
 - `created_at datetime(3)`
 
 ### comments
 Comments and replies (soft delete).
 
-- `id char(36)`
-- `post_id char(36)`
-- `author_id char(36)`
-- `parent_id char(36)?`
+- `id bigint unsigned`
+- `post_id bigint unsigned`
+- `author_id bigint unsigned`
+- `parent_id bigint unsigned?`
 - `body varchar(2200)`
 - `like_count int unsigned`
 - `reply_count int unsigned`
@@ -154,8 +154,8 @@ Comments and replies (soft delete).
 ### conversation_members
 Each member of a chat: request pending, muted, last read, left.
 
-- `conversation_id char(36)`
-- `user_id char(36)`
+- `conversation_id bigint unsigned`
+- `user_id bigint unsigned`
 - `is_admin tinyint(1)`
 - `request_pending tinyint(1)`
 - `muted tinyint(1)`
@@ -166,19 +166,19 @@ Each member of a chat: request pending, muted, last read, left.
 ### conversations
 A chat between two people (unique per pair).
 
-- `id char(36)`
+- `id bigint unsigned`
 - `is_group tinyint(1)`
 - `title varchar(100)?`
 - `dm_key char(73)?`
-- `created_by char(36)?`
+- `created_by bigint unsigned?`
 - `created_at datetime(3)`
 - `last_message_at datetime(3)`
 
 ### follows
 Who follows whom (pending until a private account accepts).
 
-- `follower_id char(36)`
-- `followee_id char(36)`
+- `follower_id bigint unsigned`
+- `followee_id bigint unsigned`
 - `status enum('pending','accepted')`
 - `created_at datetime(3)`
 - `accepted_at datetime(3)?`
@@ -186,8 +186,8 @@ Who follows whom (pending until a private account accepts).
 ### friendships
 Friend requests and friends (one row per pair).
 
-- `requester_id char(36)`
-- `addressee_id char(36)`
+- `requester_id bigint unsigned`
+- `addressee_id bigint unsigned`
 - `status enum('pending','accepted','rejected')`
 - `pair_key char(73)`
 - `created_at datetime(3)`
@@ -204,14 +204,14 @@ Every hashtag and how many posts use it.
 ### messages
 Messages: text, a photo/video key, or a shared post. Not encrypted.
 
-- `id char(36)`
-- `conversation_id char(36)`
-- `sender_id char(36)?`
+- `id bigint unsigned`
+- `conversation_id bigint unsigned`
+- `sender_id bigint unsigned?`
 - `body varchar(4000)?`
 - `media_type enum('image','video')?`
 - `storage_key varchar(300)?`
-- `shared_post_id char(36)?`
-- `reply_to_id char(36)?`
+- `shared_post_id bigint unsigned?`
+- `reply_to_id bigint unsigned?`
 - `created_at datetime(3)`
 - `edited_at datetime(3)?`
 - `deleted_at datetime(3)?`
@@ -219,8 +219,8 @@ Messages: text, a photo/video key, or a shared post. Not encrypted.
 ### mutes
 Muted posts / stories per person.
 
-- `muter_id char(36)`
-- `muted_id char(36)`
+- `muter_id bigint unsigned`
+- `muted_id bigint unsigned`
 - `mute_posts tinyint(1)`
 - `mute_stories tinyint(1)`
 - `created_at datetime(3)`
@@ -229,34 +229,34 @@ Muted posts / stories per person.
 Likes, comments, follows, requests... shown in Activity.
 
 - `id bigint unsigned`
-- `recipient_id char(36)`
-- `actor_id char(36)?`
+- `recipient_id bigint unsigned`
+- `actor_id bigint unsigned?`
 - `type varchar(32)`
-- `post_id char(36)?`
-- `comment_id char(36)?`
-- `story_id char(36)?`
+- `post_id bigint unsigned?`
+- `comment_id bigint unsigned?`
+- `story_id bigint unsigned?`
 - `read_at datetime(3)?`
 - `created_at datetime(3)`
 
 ### post_hashtags
 Which post uses which hashtag.
 
-- `post_id char(36)`
+- `post_id bigint unsigned`
 - `hashtag_id bigint unsigned`
 - `created_at datetime(3)`
 
 ### post_likes
 Who liked which post.
 
-- `post_id char(36)`
-- `user_id char(36)`
+- `post_id bigint unsigned`
+- `user_id bigint unsigned`
 - `created_at datetime(3)`
 
 ### post_media
 The photos/videos of a post or reel, in order, with a photo's time in a reel.
 
-- `id char(36)`
-- `post_id char(36)`
+- `id bigint unsigned`
+- `post_id bigint unsigned`
 - `position tinyint unsigned`
 - `media_type enum('image','video')`
 - `storage_key varchar(300)`
@@ -269,15 +269,15 @@ The photos/videos of a post or reel, in order, with a photo's time in a reel.
 ### post_mentions
 Who was @mentioned in which post.
 
-- `post_id char(36)`
-- `user_id char(36)`
+- `post_id bigint unsigned`
+- `user_id bigint unsigned`
 
 ### post_tags
 People tagged in a photo (pending / approved / removed).
 
-- `post_id char(36)`
-- `tagged_user_id char(36)`
-- `tagged_by char(36)`
+- `post_id bigint unsigned`
+- `tagged_user_id bigint unsigned`
+- `tagged_by bigint unsigned`
 - `status enum('pending','approved','removed')`
 - `created_at datetime(3)`
 - `responded_at datetime(3)?`
@@ -285,8 +285,8 @@ People tagged in a photo (pending / approved / removed).
 ### posts
 Posts and reels: caption, audience, counters, soft delete.
 
-- `id char(36)`
-- `author_id char(36)`
+- `id bigint unsigned`
+- `author_id bigint unsigned`
 - `kind enum('post','reel')`
 - `audience enum('public','friends','only_me')`
 - `caption varchar(2200)`
@@ -304,7 +304,7 @@ Posts and reels: caption, audience, counters, soft delete.
 ### recovery_requests
 Forgot password / username requests: tied to an email or phone (hashed), HMAC of the code, attempts, when it was verified.
 
-- `id char(36)`
+- `id bigint unsigned`
 - `channel enum('email','phone')`
 - `contact_hash char(64)` #️⃣ hash / key (hex text)
 - `code_hash char(64)` #️⃣ hash / key (hex text)
@@ -318,38 +318,38 @@ Forgot password / username requests: tied to an email or phone (hashed), HMAC of
 ### reports
 Reports of a user / post / comment / story / message and what moderators did.
 
-- `id char(36)`
-- `reporter_id char(36)?`
+- `id bigint unsigned`
+- `reporter_id bigint unsigned?`
 - `target_type enum('user','post','comment','story','message')`
-- `target_id char(36)`
+- `target_id bigint unsigned`
 - `reason varchar(50)`
 - `details varchar(1000)?`
 - `status enum('open','reviewing','actioned','dismissed')`
-- `resolved_by char(36)?`
+- `resolved_by bigint unsigned?`
 - `resolved_at datetime(3)?`
 - `created_at datetime(3)`
 
 ### restrictions
 Restricted people (their messages go to Requests, no receipts).
 
-- `restrictor_id char(36)`
-- `restricted_id char(36)`
+- `restrictor_id bigint unsigned`
+- `restricted_id bigint unsigned`
 - `created_at datetime(3)`
 
 ### saved_collections
 Named collections of saved posts.
 
-- `id char(36)`
-- `user_id char(36)`
+- `id bigint unsigned`
+- `user_id bigint unsigned`
 - `name varchar(50)`
 - `created_at datetime(3)`
 
 ### saved_posts
 Posts a person saved (optionally in a collection).
 
-- `user_id char(36)`
-- `post_id char(36)`
-- `collection_id char(36)?`
+- `user_id bigint unsigned`
+- `post_id bigint unsigned`
+- `collection_id bigint unsigned?`
 - `created_at datetime(3)`
 
 ### schema_migrations
@@ -362,18 +362,18 @@ Which database migration files have been applied.
 A person's recent searches.
 
 - `id bigint unsigned`
-- `user_id char(36)`
+- `user_id bigint unsigned`
 - `query varchar(100)?`
-- `target_user_id char(36)?`
+- `target_user_id bigint unsigned?`
 - `hashtag_id bigint unsigned?`
 - `created_at datetime(3)`
 
 ### sessions
 One row per signed-in device: hash of the refresh token, device, IP, expiry, revoked or rotated.
 
-- `id char(36)`
-- `user_id char(36)`
-- `family_id char(36)`
+- `id bigint unsigned`
+- `user_id bigint unsigned`
+- `family_id bigint unsigned`
 - `refresh_token_hash char(64)` #️⃣ hash / key (hex text)
 - `user_agent varchar(300)?`
 - `ip varchar(45)?`
@@ -381,13 +381,13 @@ One row per signed-in device: hash of the refresh token, device, IP, expiry, rev
 - `last_used_at datetime(3)`
 - `expires_at datetime(3)`
 - `revoked_at datetime(3)?`
-- `replaced_by char(36)?`
+- `replaced_by bigint unsigned?`
 
 ### stories
 24-hour stories: media key, caption, expiry, view count.
 
-- `id char(36)`
-- `author_id char(36)`
+- `id bigint unsigned`
+- `author_id bigint unsigned`
 - `media_type enum('image','video')`
 - `storage_key varchar(300)`
 - `thumbnail_key varchar(300)?`
@@ -400,15 +400,15 @@ One row per signed-in device: hash of the refresh token, device, IP, expiry, rev
 ### story_views
 Who viewed (and liked) which story.
 
-- `story_id char(36)`
-- `viewer_id char(36)`
+- `story_id bigint unsigned`
+- `viewer_id bigint unsigned`
 - `liked tinyint(1)`
 - `viewed_at datetime(3)`
 
 ### user_privacy
 Per-person privacy: who sees email / phone / birthday / details / friends, who can find them, who can tag or mention, default post audience.
 
-- `user_id char(36)`
+- `user_id bigint unsigned`
 - `show_email enum('everyone','friends','only_me')`
 - `show_phone enum('everyone','friends','only_me')`
 - `show_birthday enum('everyone','friends','only_me')`
@@ -426,7 +426,7 @@ Per-person privacy: who sees email / phone / birthday / details / friends, who c
 ### user_settings
 Per-person settings: theme, who may message/mention, read receipts, activity status, notification switches.
 
-- `user_id char(36)`
+- `user_id bigint unsigned`
 - `theme enum('system','light','dark')`
 - `messages_from enum('everyone','following','friends','nobody')`
 - `mentions_from enum('everyone','following','nobody')`
@@ -441,7 +441,7 @@ Per-person settings: theme, who may message/mention, read receipts, activity sta
 ### users
 Every account: name, username, encrypted email and phone, password hash, profile, counters, status, 2-factor secret.
 
-- `id char(36)`
+- `id bigint unsigned`
 - `username varchar(30)`
 - `full_name varchar(60)`
 - `email_ciphertext varchar(1024)?` 🔒 encrypted (AES-256-GCM, hex text)
@@ -478,7 +478,7 @@ Every account: name, username, encrypted email and phone, password hash, profile
 Sign-up codes (and other one-time codes): only an HMAC of the code, attempts, expiry.
 
 - `id bigint unsigned`
-- `user_id char(36)`
+- `user_id bigint unsigned`
 - `channel enum('email','phone')`
 - `purpose enum('signup','login','password_reset','change_contact')`
 - `code_hash char(64)` #️⃣ hash / key (hex text)

@@ -6,7 +6,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { exec, pool, q } from '../../db/pool.js';
 import { AppError, forbidden } from '../../lib/errors.js';
-import { fromBin, isUuid, toBin } from '../../lib/ids.js';
+import { fromBin, isId, toBin } from '../../lib/ids.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { validateBody } from '../../middleware/validate.js';
 
@@ -46,7 +46,7 @@ moderationRouter.get('/reports', async (req, res, next) => {
 
 moderationRouter.patch('/reports/:id', validateBody(z.object({ status: z.enum(['reviewing', 'actioned', 'dismissed']) }).strict()), async (req, res, next) => {
   try {
-    if (!isUuid(req.params.id)) throw new AppError(404, 'not_found', 'Not found.');
+    if (!isId(req.params.id)) throw new AppError(404, 'not_found', 'Not found.');
     const r = await exec(pool, 'UPDATE reports SET status = ?, resolved_by = ?, resolved_at = IF(? = \'reviewing\', NULL, NOW(3)) WHERE id = ?', [
       req.body.status, toBin(req.auth.userId), req.body.status, toBin(req.params.id),
     ]);

@@ -95,9 +95,8 @@ which also releases their username, email and phone.
 MySQL 8 (InnoDB, `utf8mb4`). The full schema lives in `server/migrations/001_init.sql` and already covers
 every feature area. MySQL-specific choices:
 
-- **IDs** are UUIDv7, generated in the app and stored as `BINARY(16)`. They start with a timestamp, so new rows
-  append to the end of InnoDB's clustered index instead of causing random page splits, and they're half the size
-  of `CHAR(36)`. `lib/ids.js` converts between the string and binary forms at the edge of every query.
+- **IDs** are plain numbers (1, 2, 3, ...): `BIGINT UNSIGNED AUTO_INCREMENT`, handed out by MySQL on insert and never encrypted. They are strings of digits in the app and in JSON.
+  `lib/ids.js` validates an id on the way in (`toBin`, `isId`); the pool returns every `*_id` column as a string.
 - **Case-insensitive** usernames and emails come from the `utf8mb4_0900_ai_ci` collation.
 - **Time**: every `DATETIME(3)` is UTC; the pool sets `time_zone = '+00:00'` on each connection.
 - **Search** uses `FULLTEXT ... WITH PARSER ngram` indexes on usernames, names and hashtags, so partial words match.
@@ -118,7 +117,7 @@ every feature area. MySQL-specific choices:
 | Safety | `reports` (moderation queue) |
 | History | `activity_log` (security events and activity history), `search_history` |
 
-Design notes: UUID keys everywhere (safe to expose, mergeable across shards); counters such as `like_count` are
+Design notes: numeric auto-increment keys (readable, small, ordered by time; every endpoint checks who may see a row, so a guessable id is no way in); counters such as `like_count` are
 denormalised and updated inside the same transaction as the like, so feeds never `COUNT(*)`; feed and inbox
 queries are backed by `(owner, created_at DESC)` indexes for cursor pagination; media rows store object-storage
 keys, never local paths.

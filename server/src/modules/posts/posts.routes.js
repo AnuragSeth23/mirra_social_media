@@ -2,7 +2,7 @@ import path from 'node:path';
 import express, { Router } from 'express';
 import { z } from 'zod';
 import { AppError } from '../../lib/errors.js';
-import { isUuid } from '../../lib/ids.js';
+import { isId } from '../../lib/ids.js';
 import { KEY_RE, MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, UPLOAD_DIR, mediaSignatureOk, saveMedia } from '../../lib/media.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { commentLimiter, postLimiter, uploadLimiter } from '../../middleware/user-limits.js';
@@ -23,11 +23,11 @@ const wrap = (fn) => async (req, res, next) => {
   }
 };
 const id = (v) => {
-  if (typeof v !== 'string' || !isUuid(v)) throw new AppError(404, 'not_found', 'Not found.');
+  if (typeof v !== 'string' || !isId(v)) throw new AppError(404, 'not_found', 'Not found.');
   return v;
 };
 const me = (req) => req.auth.userId;
-const before = (req) => (typeof req.query.before === 'string' && isUuid(req.query.before) ? req.query.before : undefined);
+const before = (req) => (typeof req.query.before === 'string' && isId(req.query.before) ? req.query.before : undefined);
 
 // Photos and videos: raw bytes in the body (no multipart dependency). Served back from /api/v1/media/<key> with Range support.
 // Two parsers so an image can never make the server buffer more than 5 MB before it is checked.
@@ -63,7 +63,7 @@ const createSchema = z.object({
   items: z.array(z.object({ key: z.string().regex(KEY_RE), durationMs: z.number().int().min(1000, 'A photo must show for at least 1 second.').max(30_000, 'A photo can show for 30 seconds at most.').optional() })).max(10, 'A reel can have up to 10 photos and videos.').optional(),
   kind: z.enum(['post', 'reel']).default('post'),
   audience: z.enum(svc.AUDIENCES).optional(),
-  tagUserIds: z.array(z.string().refine(isUuid, 'Invalid id.')).max(20, 'You can tag up to 20 people.').optional(),
+  tagUserIds: z.array(z.string().refine(isId, 'Invalid id.')).max(20, 'You can tag up to 20 people.').optional(),
 }).strict();
 const editSchema = z
   .object({
@@ -73,7 +73,7 @@ const editSchema = z
   .strict()
   .refine((v) => v.caption !== undefined || v.audience !== undefined, 'Change the caption or the audience.');
 const commentSchema = z.object({
-  parentId: z.string().refine(isUuid, 'Invalid id.').optional(),
+  parentId: z.string().refine(isId, 'Invalid id.').optional(),
   body: z.string().trim().min(1, 'Write something first.').max(2200, 'Keep it under 2,200 characters.'),
 });
 

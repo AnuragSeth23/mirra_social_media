@@ -1,14 +1,13 @@
 import { exec, pool, q } from '../../db/pool.js';
 import { NOT_BLOCKED } from '../../lib/blocks.js';
 import { AppError } from '../../lib/errors.js';
-import { fromBin, toBin, uuidv7 } from '../../lib/ids.js';
+import { fromBin, toBin } from '../../lib/ids.js';
 import { mediaTypeOf, mediaUrl, requireMedia } from '../../lib/media.js';
 
 export async function createStory(me, mediaKey, caption) {
   await requireMedia(mediaKey);
-  const id = uuidv7();
-  await exec(pool, 'INSERT INTO stories (id, author_id, media_type, storage_key, caption) VALUES (?, ?, ?, ?, ?)', [toBin(id), toBin(me), mediaTypeOf(mediaKey), mediaKey, caption || null]);
-  return { id };
+  const { insertId } = await exec(pool, 'INSERT INTO stories (author_id, media_type, storage_key, caption) VALUES (?, ?, ?, ?)', [toBin(me), mediaTypeOf(mediaKey), mediaKey, caption || null]);
+  return { id: String(insertId) };
 }
 
 /** Live (under 24 h) stories from me and the people I follow, grouped per person. Mine first, then unseen, then seen. */

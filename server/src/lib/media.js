@@ -3,7 +3,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config/env.js';
 import { AppError } from './errors.js';
-import { uuidv7 } from './ids.js';
 
 export const UPLOAD_DIR = path.resolve(process.cwd(), 'uploads');
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -57,7 +56,7 @@ export async function saveMedia(buf) {
   if (mediaType === 'image' && buf.length > MAX_IMAGE_BYTES) throw new AppError(413, 'image_too_large', 'Photos can be up to 5 MB.');
   if (buf.length > MAX_VIDEO_BYTES) throw new AppError(413, 'video_too_large', 'Videos can be up to 50 MB.');
   await fs.mkdir(UPLOAD_DIR, { recursive: true });
-  const key = `${uuidv7()}.${ext}`;
+  const key = `${crypto.randomUUID()}.${ext}`;
   await fs.writeFile(path.join(UPLOAD_DIR, key), buf);
   return { key, mediaType };
 }

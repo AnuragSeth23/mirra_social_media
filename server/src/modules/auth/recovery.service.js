@@ -1,8 +1,8 @@
 import { config } from '../../config/env.js';
 import { exec, pool, q, tx } from '../../db/pool.js';
-import { blindIndex, decryptField, emailAad, emailIndex, hashOtp, randomOtp, safeEqual } from '../../lib/crypto.js';
+import { blindIndex, decryptField, emailAad, emailIndex, hashOtp, randomOtp, randomToken, safeEqual } from '../../lib/crypto.js';
 import { AppError, unauthorized } from '../../lib/errors.js';
-import { fromBin, isUuid, toBin, uuidv7 } from '../../lib/ids.js';
+import { fromBin, isId, toBin } from '../../lib/ids.js';
 import { mediaUrl } from '../../lib/media.js';
 import { deliverCode } from '../../lib/otp-delivery.js';
 import { hashPassword } from '../../lib/password.js';
@@ -65,7 +65,7 @@ async function resolveContact(identifier, channelPref) {
 
 function requestIdOf(ticket) {
   const { sub } = verifyRecoveryTicket(ticket);
-  if (!isUuid(sub)) throw unauthorized('invalid_token', 'Start again.');
+  if (!isId(sub)) throw unauthorized('invalid_token', 'Start again.');
   return sub;
 }
 
@@ -73,7 +73,7 @@ export async function start(identifier, channelPref) {
   const contact = await resolveContact(identifier, channelPref);
   const known = !!contact.hash && (await accountsFor(pool, contact.channel, contact.hash)).length > 0;
 
-  let id = uuidv7();
+  let id;
   let dev = { note: 'No account matches that username, email or phone, so no code was sent.' };
 
   if (known) {
@@ -92,27 +92,32 @@ export async function start(identifier, channelPref) {
       dev = { code: recent.dev_code ?? undefined, note: 'A code was sent a moment ago. Use that one (a new one can be requested after a minute).' };
     } else if (capped) {
       dev = { note: 'Too many codes were requested for this contact. Try again in an hour.' };
-      await createRequest(id, contact.channel, blindIndex(`unused:${id}`), randomOtp(), false);
+      id = await createRequest(contact.channel, blindIndex(`unused:${randomToken()}`), randomOtp(), false);
     } else {
       const code = randomOtp();
-      await createRequest(id, contact.channel, contact.hash, code, true);
+      id = await createRequest(contact.channel, contact.hash, code, true);
       await deliverCode({ channel: contact.channel, to: contact.plain, code });
       dev = { code };
     }
   } else {
     // Unknown identifier: a request nobody can complete, so the answers and the try-limits look exactly like a real one.
-    await createRequest(id, contact.channel, blindIndex(`unknown:${id}`), randomOtp(), false);
+    id = await createRequest(contact.channel, blindIndex(`unknown:${randomToken()}`), randomOtp(), false);
   }
 
   return { sent: true, ticket: signRecoveryTicket(id), channel: contact.channel, destination: contact.shown, ...(DEV_VISIBLE_CODES ? { dev } : {}) };
 }
 
-const createRequest = (id, channel, contactHash, code, keepDevCode) =>
-  exec(
+/** Creates the request and returns its id. The code is hashed together with the id, which only exists once the row is inserted. */
+const createRequest = async (channel, contactHash, code, keepDevCode) => {
+  const { insertId } = await exec(
     pool,
-    `INSERT INTO recovery_requests (id, channel, contact_hash, code_hash, dev_code, expires_at) VALUES (?, ?, ?, ?, ?, NOW(3) + INTERVAL ? MINUTE)`,
-    [id, channel, contactHash, hashOtp(code, codeScope(id)), keepDevCode && DEV_VISIBLE_CODES ? code : null, CODE_TTL_MINUTES],
+    `INSERT INTO recovery_requests (channel, contact_hash, code_hash, dev_code, expires_at) VALUES (?, ?, '', ?, NOW(3) + INTERVAL ? MINUTE)`,
+    [channel, contactHash, keepDevCode && DEV_VISIBLE_CODES ? code : null, CODE_TTL_MINUTES],
   );
+  const id = String(insertId);
+  await exec(pool, 'UPDATE recovery_requests SET code_hash = ? WHERE id = ?', [hashOtp(code, codeScope(id)), id]);
+  return id;
+};
 
 /** Checks the code. A correct code proves the contact and returns every account that uses it. */
 export async function verify(ticket, code) {

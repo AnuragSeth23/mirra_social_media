@@ -14,7 +14,7 @@
  */
 import { exec, pool, q, tx } from '../../db/pool.js';
 import { AppError } from '../../lib/errors.js';
-import { fromBin, toBin, uuidv7 } from '../../lib/ids.js';
+import { fromBin, toBin } from '../../lib/ids.js';
 import { mediaUrl } from '../../lib/media.js';
 import { relation } from '../../lib/permissions.js';
 import { mayMessage, settingsOf } from '../messages/messages.service.js';
@@ -59,7 +59,7 @@ async function close(id, status, by) {
     const [row] = await q(c, 'SELECT conversation_id, caller_id, status FROM calls WHERE id = ? FOR UPDATE', [toBin(id)]);
     if (!row || !['ringing', 'active'].includes(row.status)) return;
     await exec(c, 'UPDATE calls SET status = ?, ended_at = NOW(3), ended_by = ? WHERE id = ?', [status, by ? toBin(by) : null, toBin(id)]);
-    await exec(c, 'INSERT INTO messages (id, conversation_id, sender_id, call_id) VALUES (?, ?, ?, ?)', [toBin(uuidv7()), row.conversation_id, row.caller_id, toBin(id)]);
+    await exec(c, 'INSERT INTO messages (conversation_id, sender_id, call_id) VALUES (?, ?, ?)', [row.conversation_id, row.caller_id, toBin(id)]);
     await exec(c, 'UPDATE conversations SET last_message_at = NOW(3) WHERE id = ?', [row.conversation_id]);
   });
 }
@@ -118,8 +118,7 @@ export async function start(me, conversationId, kind) {
     throw new AppError(409, 'busy', iAmBusy ? 'You are already on a call.' : 'They are on another call. Try again in a moment.');
   }
 
-  const id = uuidv7();
-  await exec(pool, 'INSERT INTO calls (id, conversation_id, caller_id, callee_id, kind, caller_seen_at) VALUES (?, ?, ?, ?, ?, NOW(3))', [toBin(id), toBin(conversationId), toBin(me), toBin(peerId), kind]);
+  const id = String((await exec(pool, 'INSERT INTO calls (conversation_id, caller_id, callee_id, kind, caller_seen_at) VALUES (?, ?, ?, ?, NOW(3))', [toBin(conversationId), toBin(me), toBin(peerId), kind])).insertId);
   return dto(await load(me, id), me);
 }
 

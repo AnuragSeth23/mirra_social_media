@@ -97,7 +97,7 @@ const sharedReel = await call('POST', `/messages/${cid}`, a.token, { sharedPostI
 expect('a reel is sent as a card with its video', sharedReel.status === 200 && sharedReel.json.data.sharedPost.kind === 'reel' && sharedReel.json.data.sharedPost.mediaType === 'video' && !!sharedReel.json.data.sharedPost.mediaUrl, sharedReel.json);
 const both = await call('POST', `/messages/${cid}`, a.token, { sharedPostId: post.json.data.id, mediaKey: png.key });
 expect('a message carries a file or a post, not both (422)', both.status === 422, both.json);
-const ghostPost = await call('POST', `/messages/${cid}`, a.token, { sharedPostId: '00000000-0000-7000-8000-000000000000' });
+const ghostPost = await call('POST', `/messages/${cid}`, a.token, { sharedPostId: '999999999' });
 expect('a post that does not exist cannot be shared (404)', ghostPost.status === 404, ghostPost.json);
 const myOnly = await call('POST', '/posts', b.token, { caption: 'private to b', audience: 'only_me' });
 const cantShare = await call('POST', `/messages/${cid}`, a.token, { sharedPostId: myOnly.json.data.id });

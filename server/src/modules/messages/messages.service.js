@@ -13,7 +13,7 @@
 import { exec, pool, q, tx } from '../../db/pool.js';
 import { NOT_BLOCKED } from '../../lib/blocks.js';
 import { AppError } from '../../lib/errors.js';
-import { fromBin, toBin, uuidv7 } from '../../lib/ids.js';
+import { fromBin, pairOf, toBin } from '../../lib/ids.js';
 import { mediaTypeOf, mediaUrl, requireMedia } from '../../lib/media.js';
 import { relation } from '../../lib/permissions.js';
 import { postPreviews } from '../posts/posts.service.js';
@@ -21,7 +21,7 @@ import { postPreviews } from '../posts/posts.service.js';
 const peerOf = (r) => ({ id: fromBin(r.peer_id), username: r.username, fullName: r.full_name, avatarUrl: mediaUrl(r.avatar_key) });
 
 /** 1:1 chats are unique per pair: dm_key = "<smaller id>_<larger id>" (readable ids, not encrypted). */
-const dmKey = (a, b) => [toBin(a), toBin(b)].sort().join('_');
+const dmKey = (a, b) => pairOf(toBin(a), toBin(b));
 
 const MESSAGE_COLUMNS = 'id, sender_id, body, media_type, storage_key, shared_post_id, call_id, created_at';
 
@@ -80,12 +80,12 @@ export async function openWith(me, other) {
   const theirs = await settingsOf(pool, other);
   if (!mayMessage(theirs.messages_from, rel)) throw new AppError(403, 'messages_closed', 'This person isn’t accepting messages from you.');
   if (existing) return { id: fromBin(existing.id) };
-  const id = uuidv7();
   // Not friends (or they restricted me): it lands in their Requests folder first.
   const asRequest = !rel.friends || rel.restrictedMe;
+  let id;
   try {
     await tx(async (c) => {
-      await exec(c, 'INSERT INTO conversations (id, is_group, dm_key, created_by) VALUES (?, 0, ?, ?)', [toBin(id), key, toBin(me)]);
+      id = String((await exec(c, 'INSERT INTO conversations (is_group, dm_key, created_by) VALUES (0, ?, ?)', [key, toBin(me)])).insertId);
       await exec(c, 'INSERT INTO conversation_members (conversation_id, user_id, request_pending) VALUES (?, ?, 0), (?, ?, ?)', [toBin(id), toBin(me), toBin(id), toBin(other), asRequest ? 1 : 0]);
     });
   } catch (err) {
@@ -200,11 +200,11 @@ export async function send(me, cid, { body, mediaKey, sharedPostId }) {
   }
   if (sharedPostId && !(await postPreviews(me, [sharedPostId])).has(sharedPostId)) throw new AppError(404, 'not_found', 'That post isn’t available.'); // you can only share what you can see
 
-  const id = uuidv7();
+  let id;
   await tx(async (c) => {
-    await exec(c, 'INSERT INTO messages (id, conversation_id, sender_id, body, media_type, storage_key, shared_post_id) VALUES (?, ?, ?, ?, ?, ?, ?)', [
-      toBin(id), toBin(cid), toBin(me), body || null, mediaType, mediaKey ?? null, sharedPostId ? toBin(sharedPostId) : null,
-    ]);
+    id = String((await exec(c, 'INSERT INTO messages (conversation_id, sender_id, body, media_type, storage_key, shared_post_id) VALUES (?, ?, ?, ?, ?, ?)', [
+      toBin(cid), toBin(me), body || null, mediaType, mediaKey ?? null, sharedPostId ? toBin(sharedPostId) : null,
+    ])).insertId);
     await exec(c, 'UPDATE conversations SET last_message_at = NOW(3) WHERE id = ?', [toBin(cid)]);
     // Replying to a request accepts it. A restricted sender's messages go to the other person's Requests folder.
     await exec(c, 'UPDATE conversation_members SET last_read_at = NOW(3), request_pending = 0 WHERE conversation_id = ? AND user_id = ?', [toBin(cid), toBin(me)]);

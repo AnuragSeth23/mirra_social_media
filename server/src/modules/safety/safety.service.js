@@ -1,6 +1,6 @@
 import { exec, pool, q, tx } from '../../db/pool.js';
 import { AppError } from '../../lib/errors.js';
-import { fromBin, toBin, uuidv7 } from '../../lib/ids.js';
+import { fromBin, toBin } from '../../lib/ids.js';
 import { mediaUrl } from '../../lib/media.js';
 import { pairKey, postVisParams, postVisibleSql, relation } from '../../lib/permissions.js';
 
@@ -113,7 +113,7 @@ export async function report(me, type, targetId, reason, details) {
 
   const [dupe] = await q(pool, `SELECT 1 FROM reports WHERE reporter_id = ? AND target_type = ? AND target_id = ? AND status IN ('open','reviewing')`, [toBin(me), type, toBin(targetId)]);
   if (!dupe) {
-    await exec(pool, 'INSERT INTO reports (id, reporter_id, target_type, target_id, reason, details) VALUES (?, ?, ?, ?, ?, ?)', [toBin(uuidv7()), toBin(me), type, toBin(targetId), reason, details]);
+    await exec(pool, 'INSERT INTO reports (reporter_id, target_type, target_id, reason, details) VALUES (?, ?, ?, ?, ?)', [toBin(me), type, toBin(targetId), reason, details]);
   }
   return { reported: true };
 }

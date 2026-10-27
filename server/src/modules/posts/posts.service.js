@@ -2,7 +2,7 @@ import { exec, pool, q, tx } from '../../db/pool.js';
 import { NOT_BLOCKED } from '../../lib/blocks.js';
 import { AppError } from '../../lib/errors.js';
 import { dropTags, syncTags } from '../../lib/hashtags.js';
-import { fromBin, toBin, uuidv7 } from '../../lib/ids.js';
+import { fromBin, toBin } from '../../lib/ids.js';
 import { mediaTypeOf, mediaUrl, requireMedia } from '../../lib/media.js';
 import { POST_VIS_N, privacyOf, postVisibleSql, relation } from '../../lib/permissions.js';
 import { notify } from '../notifications/notifications.service.js';
@@ -83,14 +83,14 @@ export async function createPost(me, caption, mediaKey, kind = 'post', audience,
   // No audience sent: use the author's own default (never a value the client invents for someone else).
   const chosen = audience ?? (await privacyOf(pool, me)).default_post_audience;
   const mentions = await checkMentions(pool, me, caption); // refuses people who do not accept mentions
-  const id = uuidv7();
+  let id;
   await tx(async (c) => {
-    await exec(c, 'INSERT INTO posts (id, author_id, kind, audience, caption) VALUES (?, ?, ?, ?, ?)', [toBin(id), toBin(me), kind, chosen, caption]);
+    id = String((await exec(c, 'INSERT INTO posts (author_id, kind, audience, caption) VALUES (?, ?, ?, ?)', [toBin(me), kind, chosen, caption])).insertId);
     for (const [position, it] of list.entries()) {
       const type = mediaTypeOf(it.key);
       // Only photos in a reel have a set time; a video plays for its own length.
       const duration = type === 'image' && kind === 'reel' ? clampMs(it.durationMs ?? IMAGE_SECONDS_DEFAULT * 1000) : null;
-      await exec(c, 'INSERT INTO post_media (id, post_id, position, media_type, storage_key, duration_ms) VALUES (?, ?, ?, ?, ?, ?)', [toBin(uuidv7()), toBin(id), position, type, it.key, duration]);
+      await exec(c, 'INSERT INTO post_media (post_id, position, media_type, storage_key, duration_ms) VALUES (?, ?, ?, ?, ?)', [toBin(id), position, type, it.key, duration]);
     }
     await exec(c, 'UPDATE users SET posts_count = posts_count + 1 WHERE id = ?', [toBin(me)]);
     await syncTags(c, id, caption);
@@ -373,7 +373,7 @@ export async function listComments(me, id) {
 
 export async function addComment(me, id, body, parentId) {
   const post = await getPost(me, id);
-  const cid = uuidv7();
+  let cid;
   let parentAuthor = null;
   await tx(async (c) => {
     if (parentId) {
@@ -385,7 +385,7 @@ export async function addComment(me, id, body, parentId) {
       if (bk) throw new AppError(404, 'not_found', 'The comment you are replying to is gone.');
       await exec(c, 'UPDATE comments SET reply_count = reply_count + 1 WHERE id = ?', [toBin(parentId)]);
     }
-    await exec(c, 'INSERT INTO comments (id, post_id, author_id, parent_id, body) VALUES (?, ?, ?, ?, ?)', [toBin(cid), toBin(id), toBin(me), parentId ? toBin(parentId) : null, body]);
+    cid = String((await exec(c, 'INSERT INTO comments (post_id, author_id, parent_id, body) VALUES (?, ?, ?, ?)', [toBin(id), toBin(me), parentId ? toBin(parentId) : null, body])).insertId);
     await exec(c, 'UPDATE posts SET comment_count = comment_count + 1 WHERE id = ?', [toBin(id)]);
     const quiet = async (owner) => (await relation(c, owner, me)).iRestricted; // owner restricted me: no notification
     if (parentAuthor && !(await quiet(parentAuthor))) await notify(c, { recipient: parentAuthor, actor: me, type: 'comment_reply', postId: id, commentId: cid });
