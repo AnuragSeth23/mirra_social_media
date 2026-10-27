@@ -133,7 +133,7 @@ export function ForgotPassword() {
       {step === 'ask' && (
         <>
           <h1>Find your account</h1>
-          <p className="lede">Forgot your password or your username? Enter your username, email or mobile number.</p>
+          <p className="lede">Forgot your password or your username? Enter your username, email or mobile number (like 98765 43210 or +91 98765 43210).</p>
           <form onSubmit={sendCode} noValidate className="stack">
             {formError && <FormAlert>{formError}</FormAlert>}
             <Field

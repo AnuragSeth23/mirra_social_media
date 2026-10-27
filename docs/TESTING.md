@@ -8,7 +8,7 @@ Three layers, all automated. Start the app first (`run.bat`), then `test-all.bat
 | API: features | `server/scripts/social-smoke.js` | 78 | API + database |
 | API: extended | `server/scripts/complete-smoke.js` | 71 | API + database |
 | API: privacy and security | `server/scripts/privacy-smoke.js` | 176 | API + database |
-| API: sign-up code choice and account recovery | `server/scripts/recovery-smoke.js` | 51 | API + database |
+| API: sign-up code choice and account recovery | `server/scripts/recovery-smoke.js` | 58 | API + database |
 | API: chat (requests, photos/videos, shared posts) | `server/scripts/chat-smoke.js` | 26 | API + database |
 | Browser (Playwright, Chrome) | `e2e/tests/*.spec.js` | 64 | API + web + Google Chrome |
 
