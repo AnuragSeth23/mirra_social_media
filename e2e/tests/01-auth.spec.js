@@ -217,6 +217,24 @@ test.describe('Sign up, sign in, forgot password', () => {
     await expect(page.getByRole('alert')).toContainText(/4 tries left/);
   });
 
+  test('forgot: a mobile number never offers the email/phone choice, one starting with 1-5 is refused at once, and no example number is shown', async ({ page }) => {
+    await page.goto('/forgot');
+    const id = page.getByLabel('Username, email or phone');
+    await expect(page.getByText(/like 98765/)).toHaveCount(0);
+    await id.fill('282822'); // six digits: a number, not a username
+    await expect(page.locator('.choice-group')).toHaveCount(0);
+    await expect(page.getByText('A mobile number starts with 6, 7, 8 or 9.')).toBeVisible();
+    await id.fill('98765'); // fine so far, but not complete
+    await expect(page.locator('.choice-group')).toHaveCount(0);
+    await expect(page.getByText(/starts with 6, 7, 8 or 9/)).toHaveCount(0);
+    await page.getByRole('button', { name: 'Send code' }).click();
+    await expect(page.getByText('Enter the full 10-digit mobile number.')).toBeVisible();
+    await id.fill('somebody'); // letters: a username, so the choice appears
+    await expect(page.locator('.choice-group')).toHaveCount(1);
+    await id.fill('+14155550123'); // a number with a country code: no choice either
+    await expect(page.locator('.choice-group')).toHaveCount(0);
+  });
+
   test('sign-in page: no browser pre-fill, no hint under the box, and the last username is suggested', async ({ browser }) => {
     const ctx = await browser.newContext();
     await ctx.addInitScript(() => localStorage.setItem('mirra.signinId', 'last_user_1'));
